@@ -16,11 +16,13 @@ tmp/
 # Reference repos are local-only inputs, not project source
 references/
 emlak/
-.codex/
-AGENTS.md
-docs/agent-playbook.md
-docs/master-agent-prompt.md
-docs/phase-2-agent-prompt.md
+.local-only/
+.local-rules/
+.*
+/??????.md
+*.rules.md
+docs/*playbook*.md
+docs/*agent-prompt*.md
 
 # Nested git repositories and editor noise
 **/.git/

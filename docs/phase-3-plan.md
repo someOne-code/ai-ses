@@ -23,7 +23,6 @@ Grounding:
 
 - [project-plan.md](/Users/umut/Desktop/ai-ses/docs/project-plan.md)
 - [reference-map.md](/Users/umut/Desktop/ai-ses/docs/reference-map.md)
-- [agent-playbook.md](/Users/umut/Desktop/ai-ses/docs/agent-playbook.md)
 - [local-n8n-runbook.md](/Users/umut/Desktop/ai-ses/docs/local-n8n-runbook.md)
 - [verification-sprint.md](/Users/umut/Desktop/ai-ses/docs/verification-sprint.md)
 

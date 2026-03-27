@@ -81,7 +81,7 @@ Use these 5 questions explicitly:
 
 ## 11. Repo Rule Compliance
 
-- Does the change follow [AGENTS.md](/Users/umut/Desktop/ai-ses/AGENTS.md)?
+- Does the change follow the repo-level working rules and source-of-truth boundaries?
 - Does it avoid direct reuse of reference repos as production code?
 - Does it avoid overwriting legacy workflows from other projects?
 - Does it avoid SQL-only search for subjective listing requests once semantic search work begins?
