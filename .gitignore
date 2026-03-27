@@ -18,6 +18,9 @@ references/
 emlak/
 .codex/
 AGENTS.md
+docs/agent-playbook.md
+docs/master-agent-prompt.md
+docs/phase-2-agent-prompt.md
 
 # Nested git repositories and editor noise
 **/.git/
