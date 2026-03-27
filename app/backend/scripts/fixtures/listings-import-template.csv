@@ -1,0 +1,3 @@
+referenceCode,title,description,listingType,propertyType,price,currency,bedrooms,bathrooms,netM2,grossM2,district,neighborhood,addressText
+IMP-1001,Kadikoy Demo 2+1,A bright renovated apartment near the coast.,sale,apartment,7250000,TRY,2,1,92,105,Kadikoy,Moda,Moda Caddesi No: 10
+IMP-1002,Atasehir Family 3+1,Family apartment with parking and elevator.,rent,apartment,85000,TRY,3,2,135,152,Atasehir,Barbaros,Barbaros Mahallesi Atasehir

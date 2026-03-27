@@ -1,0 +1,610 @@
+{
+  "name": "ai-ses - CRM Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ai-ses - CRM Sync\nProject-owned CRM delivery workflow for backend-owned lead and call outcome events.\n\nExpected inbound body shape:\n- kind: crm_webhook\n- office\n- entity\n- event\n- connection.config\n\nExpected trusted connection.config fields:\n- deliveryUrl\n\nDo not trust callback routing from request payload.\nBackend callback target stays fixed to the backend-owned CRM delivery callback contract.",
+        "height": 360,
+        "width": 500,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        -220
+      ],
+      "id": "6c4962d5-f8bb-4c9d-9604-bf7b7fddce90",
+      "name": "Workflow Contract"
+    },
+    {
+      "parameters": {
+        "content": "## Runtime Notes\n- Build with the Webhook node test URL first, then activate and switch to the production URL.\n- Inbound auth requires header x-ai-ses-trigger-secret to match {{$env.N8N_CRM_TRIGGER_SECRET}} before any outbound step runs.\n- CRM delivery target is read only from backend-authenticated office connection config: body.connection.config.deliveryUrl.\n- Backend callback always goes to {{$env.AI_SES_BACKEND_BASE_URL}}/v1/webhooks/n8n/crm-deliveries with fixed header x-ai-ses-callback-secret.\n- Backend callback writeback is best-effort. If it fails after CRM delivery work, the workflow still responds with callbackAccepted=false.\n- This workflow orchestrates delivery only. Backend remains the source of truth for office, entity, and lead qualification state.",
+        "height": 340,
+        "width": 460,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        220
+      ],
+      "id": "9afc0675-38f2-4a63-a14a-0312d06c5cd7",
+      "name": "Runtime Notes"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-ses-crm-sync",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -620,
+        20
+      ],
+      "id": "96c93c2b-8e54-4e84-9c72-0c4b17691c37",
+      "name": "Webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4db75f17-f0c7-4fe0-94ea-e46c2e25e4d8",
+              "leftValue": "={{ $('Webhook').item.json.headers['x-ai-ses-trigger-secret'] || '' }}",
+              "rightValue": "={{ $env.N8N_CRM_TRIGGER_SECRET || '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -500,
+        20
+      ],
+      "id": "d971b5d9-7547-46f8-b376-0160b45bc9c4",
+      "name": "If Trigger Secret Valid"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2061d716-d44e-44da-ad43-29fc00c2c192",
+              "name": "workflowName",
+              "value": "ai-ses - CRM Sync",
+              "type": "string"
+            },
+            {
+              "id": "fd422261-2108-4472-9fa6-63cfd8d294d1",
+              "name": "officeId",
+              "value": "={{ $('Webhook').item.json.body.office.officeId }}",
+              "type": "string"
+            },
+            {
+              "id": "57a91242-ce58-4230-b46e-b6f7b20cb4ca",
+              "name": "entityType",
+              "value": "={{ $('Webhook').item.json.body.entity.entityType }}",
+              "type": "string"
+            },
+            {
+              "id": "ecfbc6e5-2e7a-497c-9cf7-f933259e516e",
+              "name": "entityId",
+              "value": "={{ $('Webhook').item.json.body.entity.id }}",
+              "type": "string"
+            },
+            {
+              "id": "9b53d0ed-3810-48f9-9cf0-bce0c44bb682",
+              "name": "eventType",
+              "value": "={{ $('Webhook').item.json.body.event.eventType }}",
+              "type": "string"
+            },
+            {
+              "id": "5ac260aa-eb1c-416b-84d7-8d105efd2472",
+              "name": "connectionId",
+              "value": "={{ $('Webhook').item.json.body.connection.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -380,
+        20
+      ],
+      "id": "63d31c1c-8834-4f66-a7b7-0e3f7b08d1a4",
+      "name": "Normalize Dispatch"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5e335ca7-cc93-4318-b6fe-d48443bfdb35",
+              "leftValue": "={{ String(Boolean($('Webhook').item.json.body.connection.config.deliveryUrl || '')) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -120,
+        20
+      ],
+      "id": "0a4d554e-7113-4dc6-b89c-b5cd53a8b779",
+      "name": "If Delivery Target Configured"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.connection.config.deliveryUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"kind\": \"crm_webhook\",\n  \"workflow\": \"ai-ses - CRM Sync\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"office\": {{ JSON.stringify($('Webhook').item.json.body.office) }},\n  \"event\": {{ JSON.stringify($('Webhook').item.json.body.event) }},\n  \"entity\": {{ JSON.stringify($('Webhook').item.json.body.entity) }}\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        120,
+        -80
+      ],
+      "id": "4a7d712b-4f46-4be9-adc8-8b914bb2dc27",
+      "name": "Deliver CRM Webhook",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3f3f7c8a-e113-4ffb-8bd9-f8ec3b3cd611",
+              "leftValue": "={{ String(Boolean($json.error || $json.errorMessage || '')) }}",
+              "rightValue": "false",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        360,
+        -80
+      ],
+      "id": "85596875-7d6c-4c7d-b69a-af0912defc38",
+      "name": "If CRM Delivery Succeeded"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_SES_BACKEND_BASE_URL + '/v1/webhooks/n8n/crm-deliveries' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ai-ses-callback-secret",
+              "value": "={{ $env.N8N_CRM_CALLBACK_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"officeId\": \"{{ $('Normalize Dispatch').item.json.officeId }}\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"entityType\": \"{{ $('Normalize Dispatch').item.json.entityType }}\",\n  \"entityId\": \"{{ $('Normalize Dispatch').item.json.entityId }}\",\n  \"eventType\": \"{{ $('Normalize Dispatch').item.json.eventType }}\",\n  \"deliveryStatus\": \"delivered\",\n  \"workflowRunId\": \"{{ $execution.id }}\",\n  \"externalRecordId\": {{ JSON.stringify($json.id || $json.recordId || $json.externalRecordId || null) }},\n  \"note\": {{ JSON.stringify($json.note || 'CRM delivery accepted.') }},\n  \"payload\": {\n    \"deliveryResponse\": {{ JSON.stringify($json) }}\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        -160
+      ],
+      "id": "001a9ddd-4544-42c7-9839-219d56e3a84a",
+      "name": "Send Delivered Result Callback",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_SES_BACKEND_BASE_URL + '/v1/webhooks/n8n/crm-deliveries' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ai-ses-callback-secret",
+              "value": "={{ $env.N8N_CRM_CALLBACK_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"officeId\": \"{{ $('Normalize Dispatch').item.json.officeId }}\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"entityType\": \"{{ $('Normalize Dispatch').item.json.entityType }}\",\n  \"entityId\": \"{{ $('Normalize Dispatch').item.json.entityId }}\",\n  \"eventType\": \"{{ $('Normalize Dispatch').item.json.eventType }}\",\n  \"deliveryStatus\": \"failed\",\n  \"workflowRunId\": \"{{ $execution.id }}\",\n  \"note\": {{ JSON.stringify((() => { const fallback = 'CRM delivery failed.'; const candidates = [$json.message, $json.error?.message, $json.errorMessage, $json.error, fallback].filter((value) => typeof value === 'string' && value.trim() !== ''); for (const candidate of candidates) { const trimmed = candidate.trim(); const separatorIndex = trimmed.indexOf(' - '); const normalized = separatorIndex === -1 ? trimmed : trimmed.slice(separatorIndex + 3); const variants = [normalized]; try { variants.push(JSON.parse(normalized)); } catch {} for (const variant of variants) { if (variant && typeof variant === 'object' && typeof variant.message === 'string' && variant.message.trim() !== '') return variant.message; if (typeof variant === 'string') { try { const parsed = JSON.parse(variant); if (parsed && typeof parsed.message === 'string' && parsed.message.trim() !== '') return parsed.message; } catch {} } } } return fallback; })()) }},\n  \"payload\": {\n    \"deliveryResponse\": {{ JSON.stringify($json) }}\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        20
+      ],
+      "id": "104dca19-483a-43eb-b10d-b1d2fe3f2bc8",
+      "name": "Send Failed Delivery Callback",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_SES_BACKEND_BASE_URL + '/v1/webhooks/n8n/crm-deliveries' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ai-ses-callback-secret",
+              "value": "={{ $env.N8N_CRM_CALLBACK_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"officeId\": \"{{ $('Normalize Dispatch').item.json.officeId }}\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"entityType\": \"{{ $('Normalize Dispatch').item.json.entityType }}\",\n  \"entityId\": \"{{ $('Normalize Dispatch').item.json.entityId }}\",\n  \"eventType\": \"{{ $('Normalize Dispatch').item.json.eventType }}\",\n  \"deliveryStatus\": \"skipped\",\n  \"workflowRunId\": \"{{ $execution.id }}\",\n  \"note\": {{ JSON.stringify('CRM deliveryUrl missing in connection config.') }},\n  \"payload\": {\n    \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\"\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        120,
+        180
+      ],
+      "id": "0fd67783-10fa-4897-b854-8526d755d2ca",
+      "name": "Send Skipped Result Callback",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0c5c5a90-b6ff-4646-8f53-1f98f757c035",
+              "name": "deliveryStatus",
+              "value": "delivered",
+              "type": "string"
+            },
+            {
+              "id": "79f68907-7dc4-467c-8f64-0872ee4ae736",
+              "name": "callbackAccepted",
+              "value": "={{ Boolean($json.data?.received) }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        760,
+        -160
+      ],
+      "id": "00e777b5-c8a8-4708-8993-93236a7c4cab",
+      "name": "Normalize Delivered Callback Result"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "81ddca5d-052a-41c7-a224-e731b25b4d95",
+              "name": "deliveryStatus",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "a7be8859-a5b3-4dc6-83f6-6678261f31e9",
+              "name": "callbackAccepted",
+              "value": "={{ Boolean($json.data?.received) }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        760,
+        20
+      ],
+      "id": "c231c03a-fb6d-4cdb-81ed-575078ac4f4f",
+      "name": "Normalize Failed Delivery Callback Result"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1bddad1d-ca16-41b2-a2f8-b836c76dcebc",
+              "name": "deliveryStatus",
+              "value": "skipped",
+              "type": "string"
+            },
+            {
+              "id": "78661c47-a893-4b5f-8c3c-b03992bab2d6",
+              "name": "callbackAccepted",
+              "value": "={{ Boolean($json.data?.received) }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        760,
+        180
+      ],
+      "id": "ccf27d1e-aa9b-474c-b7ae-167e3cfcf3e4",
+      "name": "Normalize Skipped Callback Result"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"accepted\": true,\n  \"workflow\": \"ai-ses - CRM Sync\",\n  \"officeId\": \"{{ $('Normalize Dispatch').item.json.officeId }}\",\n  \"entityType\": \"{{ $('Normalize Dispatch').item.json.entityType }}\",\n  \"entityId\": \"{{ $('Normalize Dispatch').item.json.entityId }}\",\n  \"deliveryStatus\": \"{{ $json.deliveryStatus }}\",\n  \"callbackAccepted\": {{ $json.callbackAccepted }}\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        900,
+        20
+      ],
+      "id": "2b36f512-23fc-46a1-b9df-e01ddbd148e7",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"accepted\": false,\n  \"workflow\": \"ai-ses - CRM Sync\",\n  \"error\": {\n    \"code\": \"CRM_SYNC_TRIGGER_FORBIDDEN\",\n    \"message\": \"Invalid CRM sync workflow trigger secret.\"\n  }\n}\n",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -260,
+        220
+      ],
+      "id": "89a446d0-9307-4c7a-b3eb-551b852e4c89",
+      "name": "Respond Unauthorized"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "If Trigger Secret Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Trigger Secret Valid": {
+      "main": [
+        [
+          {
+            "node": "Normalize Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Dispatch": {
+      "main": [
+        [
+          {
+            "node": "If Delivery Target Configured",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Delivery Target Configured": {
+      "main": [
+        [
+          {
+            "node": "Deliver CRM Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Skipped Result Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver CRM Webhook": {
+      "main": [
+        [
+          {
+            "node": "If CRM Delivery Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If CRM Delivery Succeeded": {
+      "main": [
+        [
+          {
+            "node": "Send Delivered Result Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Failed Delivery Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Delivered Result Callback": {
+      "main": [
+        [
+          {
+            "node": "Normalize Delivered Callback Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Failed Delivery Callback": {
+      "main": [
+        [
+          {
+            "node": "Normalize Failed Delivery Callback Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Skipped Result Callback": {
+      "main": [
+        [
+          {
+            "node": "Normalize Skipped Callback Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Delivered Callback Result": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Failed Delivery Callback Result": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Skipped Callback Result": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "8f16b4ec-3ccd-4a09-b12b-15c31de53db6",
+  "meta": {},
+  "id": "aiSesCrmSync",
+  "tags": []
+}

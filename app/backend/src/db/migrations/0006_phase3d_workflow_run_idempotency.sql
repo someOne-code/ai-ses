@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "audit_events_n8n_workflow_run_dedupe_idx" ON "audit_events" USING btree ("office_id","action","actor_type","actor_id") WHERE "audit_events"."actor_type" = 'n8n' and "audit_events"."actor_id" is not null and "audit_events"."action" in ('booking_result_recorded', 'crm_delivery_result_recorded');

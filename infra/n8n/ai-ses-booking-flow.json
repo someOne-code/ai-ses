@@ -1,0 +1,953 @@
+{
+  "name": "ai-ses - Booking Flow",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ai-ses - Booking Flow\nProject-owned booking workflow for backend-created showing requests.\n\nExpected inbound body shape:\n- kind: booking_workflow\n- office\n- showingRequest\n- connection.config\n\nExpected trusted connection.config fields:\n- provider (optional, use `google_calendar` for the Google path)\n- availabilityUrl and bookingUrl for generic webhook providers\n- calendarId for Google Calendar provider path\n- durationMinutes (optional, default 30)\n- confirmationDelaySeconds (optional, default 0)",
+        "height": 420,
+        "width": 480,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        -220
+      ],
+      "id": "a4f53f2f-6e64-4a1e-a9fd-f5741137c6b0",
+      "name": "Workflow Contract"
+    },
+    {
+      "parameters": {
+        "content": "## Runtime Notes\n- Build with the Webhook node test URL first, then activate and switch to the production URL.\n- Inbound auth requires header x-ai-ses-trigger-secret to match {{$env.N8N_BOOKING_TRIGGER_SECRET}} before any outbound step runs.\n- Backend callback always goes to {{$env.AI_SES_BACKEND_BASE_URL}}/v1/webhooks/n8n/booking-results with fixed header x-ai-ses-callback-secret.\n- Backend callback writeback is best-effort. If it fails after provider side effects, the workflow still responds with callbackAccepted=false.\n- Generic provider path still uses trusted connection.config.availabilityUrl and bookingUrl.\n- Google provider path uses the official Google Calendar node with a separately attached credential after import.\n- This workflow does not own showing_request records; backend stays source of truth.",
+        "height": 300,
+        "width": 420,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        220
+      ],
+      "id": "54f684ab-bf93-46ea-b6ea-e3d23ffafe2e",
+      "name": "Runtime Notes"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-ses-booking-flow",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -620,
+        20
+      ],
+      "id": "3b5434d9-f2ae-4f84-b3de-cac63f1ec1ad",
+      "name": "Webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5d7d8618-b300-478d-a321-cbe7c44352d3",
+              "leftValue": "={{ String(Boolean($json.error || $json.errorMessage || '')) }}",
+              "rightValue": "false",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        120,
+        20
+      ],
+      "id": "137e306d-f5f3-4cc3-b863-d643a0611f51",
+      "name": "If Availability Succeeded"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9f23fa6e-a8c9-4980-aefc-7aa9c9af6efc",
+              "leftValue": "={{ $('Webhook').item.json.headers['x-ai-ses-trigger-secret'] || '' }}",
+              "rightValue": "={{ $env.N8N_BOOKING_TRIGGER_SECRET || '' }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -500,
+        20
+      ],
+      "id": "6c070fd7-f1b8-49fc-8471-034c4af0f771",
+      "name": "If Trigger Secret Valid"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1e49c2b0-f77a-489d-b7f0-bd7eb7eb9932",
+              "name": "workflowName",
+              "value": "ai-ses - Booking Flow",
+              "type": "string"
+            },
+            {
+              "id": "f15fbefe-9637-492d-874d-1ba15dd55ab4",
+              "name": "officeId",
+              "value": "={{ $('Webhook').item.json.body.office.officeId }}",
+              "type": "string"
+            },
+            {
+              "id": "b5074ef7-5f8e-4993-a5a4-1c7ea4d1f54b",
+              "name": "showingRequestId",
+              "value": "={{ $('Webhook').item.json.body.showingRequest.id }}",
+              "type": "string"
+            },
+            {
+              "id": "2908c79f-b8c6-4fd0-85a5-f4ad5d87f4a0",
+              "name": "connectionId",
+              "value": "={{ $('Webhook').item.json.body.connection.id }}",
+              "type": "string"
+            },
+            {
+              "id": "37f144cf-fded-4045-aa73-97f43b1cf591",
+              "name": "durationMinutes",
+              "value": "={{ Number($('Webhook').item.json.body.connection.config.durationMinutes ?? 30) }}",
+              "type": "number"
+            },
+            {
+              "id": "f7dd2942-8d88-4421-bb09-418c094f98dd",
+              "name": "confirmationDelaySeconds",
+              "value": "={{ Number($('Webhook').item.json.body.connection.config.confirmationDelaySeconds ?? 0) }}",
+              "type": "number"
+            },
+            {
+              "id": "28e47a3c-1a11-4d3a-bca9-3c33d1be5082",
+              "name": "providerKind",
+              "value": "={{ $('Webhook').item.json.body.connection.config.provider || 'generic_webhook' }}",
+              "type": "string"
+            },
+            {
+              "id": "dab4be02-481a-4139-b518-b31f853a6d51",
+              "name": "calendarId",
+              "value": "={{ $('Webhook').item.json.body.connection.config.calendarId || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -380,
+        20
+      ],
+      "id": "05644ba1-b44c-41b8-9f3d-dacbc424af3a",
+      "name": "Normalize Dispatch"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.connection.config.availabilityUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"kind\": \"booking_availability_check\",\n  \"workflow\": \"ai-ses - Booking Flow\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"office\": {{ JSON.stringify($('Webhook').item.json.body.office) }},\n  \"showingRequest\": {{ JSON.stringify($('Webhook').item.json.body.showingRequest) }},\n  \"requestedSlot\": {\n    \"preferredDatetime\": \"{{ $('Webhook').item.json.body.showingRequest.preferredDatetime }}\",\n    \"durationMinutes\": {{ $('Normalize Dispatch').item.json.durationMinutes }}\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -120,
+        20
+      ],
+      "id": "52fe7b3c-550d-4748-b14f-314a885e1d8f",
+      "name": "Check Availability",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "google-provider-check",
+              "leftValue": "={{ $('Normalize Dispatch').item.json.providerKind }}",
+              "rightValue": "google_calendar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -250,
+        20
+      ],
+      "id": "e14f6d6e-9b5a-4cab-a2b0-2e50f50a211a",
+      "name": "If Google Calendar Provider"
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "operation": "availability",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Normalize Dispatch').item.json.calendarId }}"
+        },
+        "timeMin": "={{ $('Webhook').item.json.body.showingRequest.preferredDatetime }}",
+        "timeMax": "={{ DateTime.fromISO($('Webhook').item.json.body.showingRequest.preferredDatetime).plus({ minutes: $('Normalize Dispatch').item.json.durationMinutes }).toISO() }}",
+        "options": {
+          "outputFormat": "availability"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -20,
+        -120
+      ],
+      "id": "23995d0f-1fe4-4f0a-bbbb-0fe3ff699f73",
+      "name": "Check Google Calendar Availability",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1a101ff-d9af-4209-9edf-8864d8f7ddc8",
+              "leftValue": "={{ String($json.available) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        120,
+        20
+      ],
+      "id": "cc8c5557-4fe6-45ee-ac50-3d5c0392922a",
+      "name": "If Requested Slot Available"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.connection.config.bookingUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"kind\": \"booking_create\",\n  \"workflow\": \"ai-ses - Booking Flow\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"office\": {{ JSON.stringify($('Webhook').item.json.body.office) }},\n  \"showingRequest\": {{ JSON.stringify($('Webhook').item.json.body.showingRequest) }},\n  \"selectedSlot\": {\n    \"scheduledDatetime\": \"{{ $('Check Availability').item.json.scheduledDatetime || $('Webhook').item.json.body.showingRequest.preferredDatetime }}\",\n    \"durationMinutes\": {{ $('Normalize Dispatch').item.json.durationMinutes }}\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        380,
+        -80
+      ],
+      "id": "726cc48b-cb58-430e-b8fe-d7e6aeef9244",
+      "name": "Create Booking",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "290de3f0-cc6e-4ea8-9802-cdcde64a5048",
+              "leftValue": "={{ $('Normalize Dispatch').item.json.providerKind }}",
+              "rightValue": "google_calendar",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        320,
+        -20
+      ],
+      "id": "d93f2b45-fd99-43d8-827f-f80136c20a0f",
+      "name": "If Google Calendar Booking Provider"
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "create",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Normalize Dispatch').item.json.calendarId }}"
+        },
+        "start": "={{ $('Webhook').item.json.body.showingRequest.preferredDatetime }}",
+        "end": "={{ DateTime.fromISO($('Webhook').item.json.body.showingRequest.preferredDatetime).plus({ minutes: $('Normalize Dispatch').item.json.durationMinutes }).toISO() }}",
+        "useDefaultReminders": true,
+        "additionalFields": {
+          "summary": "={{ 'ai-ses Showing - ' + ($('Webhook').item.json.body.showingRequest.listingReferenceCode || $('Webhook').item.json.body.showingRequest.id) }}",
+          "description": "={{ ['Showing request: ' + $('Normalize Dispatch').item.json.showingRequestId, 'Listing: ' + ($('Webhook').item.json.body.showingRequest.listingTitle || ''), 'Customer: ' + ($('Webhook').item.json.body.showingRequest.customerName || ''), 'Phone: ' + ($('Webhook').item.json.body.showingRequest.customerPhone || ''), 'Email: ' + ($('Webhook').item.json.body.showingRequest.customerEmail || '')].join('\\n') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        520,
+        -220
+      ],
+      "id": "5e4d7f3d-cd74-47ac-8bab-04fcb48908fd",
+      "name": "Create Google Calendar Event",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7d0bf52d-1a61-45f5-b6d6-f1ce3f7bc065",
+              "leftValue": "={{ String(Boolean($json.error || $json.errorMessage || '')) }}",
+              "rightValue": "false",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        620,
+        -80
+      ],
+      "id": "695c087e-353d-45be-a28f-af68373657ad",
+      "name": "If Booking Creation Succeeded"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e2376fbe-073d-482d-bea5-cae1667d64d8",
+              "leftValue": "={{ $('Normalize Dispatch').item.json.confirmationDelaySeconds }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "larger"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        620,
+        -80
+      ],
+      "id": "2490aeba-ef20-4c36-a1d8-f93406f88d39",
+      "name": "If Confirmation Delay Needed"
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ $('Normalize Dispatch').item.json.confirmationDelaySeconds }}",
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        860,
+        -180
+      ],
+      "id": "de4f08ec-6c40-43f1-8e70-84bb5e0d7cc7",
+      "name": "Wait Before Backend Callback"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_SES_BACKEND_BASE_URL + '/v1/webhooks/n8n/booking-results' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ai-ses-callback-secret",
+              "value": "={{ $env.N8N_BOOKING_CALLBACK_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"officeId\": \"{{ $('Normalize Dispatch').item.json.officeId }}\",\n  \"showingRequestId\": \"{{ $('Normalize Dispatch').item.json.showingRequestId }}\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"status\": \"confirmed\",\n  \"workflowRunId\": \"{{ $execution.id }}\",\n  \"externalBookingId\": {{ JSON.stringify($json.externalBookingId || $json.id || $json.eventId || null) }},\n  \"scheduledDatetime\": {{ JSON.stringify($json.scheduledDatetime || $json.startTime || $json.start?.dateTime || $json.start?.date || $json.start || $('Webhook').item.json.body.showingRequest.preferredDatetime) }},\n  \"note\": {{ JSON.stringify($json.note || ($json.id ? 'Google Calendar event created.' : 'Showing booking confirmed.')) }},\n  \"payload\": {\n    \"bookingProviderResponse\": {{ JSON.stringify($json) }}\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        -120
+      ],
+      "id": "14e7f48f-b3d0-45da-b95c-174d0d2f54ed",
+      "name": "Send Confirmed Result Callback",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_SES_BACKEND_BASE_URL + '/v1/webhooks/n8n/booking-results' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ai-ses-callback-secret",
+              "value": "={{ $env.N8N_BOOKING_CALLBACK_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"officeId\": \"{{ $('Normalize Dispatch').item.json.officeId }}\",\n  \"showingRequestId\": \"{{ $('Normalize Dispatch').item.json.showingRequestId }}\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"status\": \"failed\",\n  \"workflowRunId\": \"{{ $execution.id }}\",\n  \"note\": {{ JSON.stringify((() => { const fallback = $json.note || (($json.alternateSlots?.length ?? 0) > 0 ? 'Requested slot unavailable. Alternate slots returned in payload.' : 'Requested slot unavailable.'); const candidates = [$json.message, $json.error?.message, $json.errorMessage, $json.error, fallback].filter((value) => typeof value === 'string' && value.trim() !== ''); for (const candidate of candidates) { const trimmed = candidate.trim(); const separatorIndex = trimmed.indexOf(' - '); const normalized = separatorIndex === -1 ? trimmed : trimmed.slice(separatorIndex + 3); const variants = [normalized]; try { variants.push(JSON.parse(normalized)); } catch {} for (const variant of variants) { if (variant && typeof variant === 'object' && typeof variant.message === 'string' && variant.message.trim() !== '') return variant.message; if (typeof variant === 'string') { try { const parsed = JSON.parse(variant); if (parsed && typeof parsed.message === 'string' && parsed.message.trim() !== '') return parsed.message; } catch {} } } } return fallback; })()) }},\n  \"payload\": {\n    \"availabilityResponse\": {{ JSON.stringify($json) }}\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        380,
+        180
+      ],
+      "id": "806c4e66-a77f-4434-a469-3e148d2a67c3",
+      "name": "Send Failed Result Callback",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AI_SES_BACKEND_BASE_URL + '/v1/webhooks/n8n/booking-results' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-ai-ses-callback-secret",
+              "value": "={{ $env.N8N_BOOKING_CALLBACK_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"officeId\": \"{{ $('Normalize Dispatch').item.json.officeId }}\",\n  \"showingRequestId\": \"{{ $('Normalize Dispatch').item.json.showingRequestId }}\",\n  \"connectionId\": \"{{ $('Normalize Dispatch').item.json.connectionId }}\",\n  \"status\": \"failed\",\n  \"workflowRunId\": \"{{ $execution.id }}\",\n  \"note\": {{ JSON.stringify((() => { const fallback = 'Showing booking creation failed.'; const candidates = [$json.message, $json.error?.message, $json.errorMessage, $json.error, fallback].filter((value) => typeof value === 'string' && value.trim() !== ''); for (const candidate of candidates) { const trimmed = candidate.trim(); const separatorIndex = trimmed.indexOf(' - '); const normalized = separatorIndex === -1 ? trimmed : trimmed.slice(separatorIndex + 3); const variants = [normalized]; try { variants.push(JSON.parse(normalized)); } catch {} for (const variant of variants) { if (variant && typeof variant === 'object' && typeof variant.message === 'string' && variant.message.trim() !== '') return variant.message; if (typeof variant === 'string') { try { const parsed = JSON.parse(variant); if (parsed && typeof parsed.message === 'string' && parsed.message.trim() !== '') return parsed.message; } catch {} } } } return fallback; })()) }},\n  \"payload\": {\n    \"bookingProviderResponse\": {{ JSON.stringify($json) }}\n  }\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        20
+      ],
+      "id": "02d24db5-b536-4cf9-bac9-8751ea14f972",
+      "name": "Send Booking Creation Failed Result Callback",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "89ddd4bc-0296-4ff7-958f-aa673f1d6608",
+              "name": "status",
+              "value": "confirmed",
+              "type": "string"
+            },
+            {
+              "id": "1c2bbf93-f612-4fd5-a266-c1d551e0e566",
+              "name": "callbackAccepted",
+              "value": "={{ Boolean($json.data?.received) }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1260,
+        -120
+      ],
+      "id": "ab38bd12-d62d-47f3-a0f2-6e1cd81b2af7",
+      "name": "Normalize Confirmed Callback Result"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "844185e2-5514-44df-b473-d14f837f92f5",
+              "name": "status",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "0b41f744-5cf0-487a-a308-32e02c27ff18",
+              "name": "callbackAccepted",
+              "value": "={{ Boolean($json.data?.received) }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1260,
+        180
+      ],
+      "id": "18e50261-2d3b-49f3-83fc-367ee9cff9ba",
+      "name": "Normalize Failed Callback Result"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "706cb1a6-a103-44c2-acbd-008ae21b5191",
+              "name": "status",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "d8f1ec6e-4e8a-4d5e-a578-936c4fb905aa",
+              "name": "callbackAccepted",
+              "value": "={{ Boolean($json.data?.received) }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1260,
+        20
+      ],
+      "id": "38bc2c8a-ec8b-49b8-96a4-310f475d57c1",
+      "name": "Normalize Booking Creation Failed Callback Result"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"accepted\": true,\n  \"workflow\": \"ai-ses - Booking Flow\",\n  \"officeId\": \"{{ $('Normalize Dispatch').item.json.officeId }}\",\n  \"showingRequestId\": \"{{ $('Normalize Dispatch').item.json.showingRequestId }}\",\n  \"status\": \"{{ $json.status }}\",\n  \"callbackAccepted\": {{ $json.callbackAccepted }}\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1380,
+        20
+      ],
+      "id": "9de58cc7-d36b-4ed4-b4b7-a72340a2a641",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"accepted\": false,\n  \"workflow\": \"ai-ses - Booking Flow\",\n  \"error\": {\n    \"code\": \"BOOKING_TRIGGER_FORBIDDEN\",\n    \"message\": \"Invalid booking workflow trigger secret.\"\n  }\n}\n",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -260,
+        220
+      ],
+      "id": "6c4950a3-d6cb-4269-810a-49f1f380ac70",
+      "name": "Respond Unauthorized"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "If Trigger Secret Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Trigger Secret Valid": {
+      "main": [
+        [
+          {
+            "node": "Normalize Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Dispatch": {
+      "main": [
+        [
+          {
+            "node": "If Google Calendar Provider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Google Calendar Provider": {
+      "main": [
+        [
+          {
+            "node": "Check Google Calendar Availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Availability": {
+      "main": [
+        [
+          {
+            "node": "If Requested Slot Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Google Calendar Availability": {
+      "main": [
+        [
+          {
+            "node": "If Requested Slot Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Requested Slot Available": {
+      "main": [
+        [
+          {
+            "node": "If Google Calendar Booking Provider",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Failed Result Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Google Calendar Booking Provider": {
+      "main": [
+        [
+          {
+            "node": "Create Google Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Booking": {
+      "main": [
+        [
+          {
+            "node": "If Booking Creation Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Google Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "If Booking Creation Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Booking Creation Succeeded": {
+      "main": [
+        [
+          {
+            "node": "If Confirmation Delay Needed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Booking Creation Failed Result Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Confirmation Delay Needed": {
+      "main": [
+        [
+          {
+            "node": "Wait Before Backend Callback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Confirmed Result Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Backend Callback": {
+      "main": [
+        [
+          {
+            "node": "Send Confirmed Result Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Confirmed Result Callback": {
+      "main": [
+        [
+          {
+            "node": "Normalize Confirmed Callback Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Failed Result Callback": {
+      "main": [
+        [
+          {
+            "node": "Normalize Failed Callback Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Booking Creation Failed Result Callback": {
+      "main": [
+        [
+          {
+            "node": "Normalize Booking Creation Failed Callback Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Confirmed Callback Result": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Failed Callback Result": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Booking Creation Failed Callback Result": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Google Calendar Booking Provider": {
+      "main": [
+        [
+          {
+            "node": "Create Google Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Booking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "91d59bdf-74c6-4e7d-8c80-92c04edabf3f",
+  "meta": {},
+  "id": "aiSesBookingFlow",
+  "tags": []
+}

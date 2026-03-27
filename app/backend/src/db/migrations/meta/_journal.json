@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1774367362124,
+      "tag": "0000_phase1_initial",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1774371565536,
+      "tag": "0001_phase2a_listing_search_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1774372569964,
+      "tag": "0002_phase2b_search_document_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1774372868758,
+      "tag": "0003_phase2b_embedding_storage_prep",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774385220659,
+      "tag": "0004_phase2c_pgvector_embedding_storage",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1774388489828,
+      "tag": "0005_phase3c_retell_call_analysis_normalization",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1774454322191,
+      "tag": "0006_phase3d_workflow_run_idempotency",
+      "breakpoints": true
+    }
+  ]
+}

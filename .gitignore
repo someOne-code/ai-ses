@@ -1,0 +1,29 @@
+.DS_Store
+Thumbs.db
+
+# Local secrets
+**/.env
+infra/n8n/.env.local
+
+# Dependencies and build output
+**/node_modules/
+**/dist/
+coverage/
+
+# Local runtime and temp files
+tmp/
+
+# Reference repos are local-only inputs, not project source
+references/
+emlak/
+.codex/
+AGENTS.md
+
+# Nested git repositories and editor noise
+**/.git/
+*.log
+
+# Local scratch files
+tmp-*.json
+tmp-*.js
+tmp-*.sql

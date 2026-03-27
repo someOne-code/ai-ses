@@ -1,0 +1,2450 @@
+﻿{
+  "name": "Protect_fortunes_voice_agent",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.vapi.ai/call",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer 33d18dd9-342d-407f-a4ef-4952df99e55d"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"assistantId\": \"4a5ef345-13ad-4a4f-af44-90b55168c8a8\",\n  \"phoneNumberId\": \"4d0f9789-1e6d-4990-bac0-6bda6db3e6c9\",\n  \"customers\": [\n    {\n      \"number\": \"{{ $json.phoneNumber }}\",\n      \"name\": \"{{ $json.name }}\",\n      \"email\":\"{{ $json.email }}\"\n    }\n  ],\n  \"assistantOverrides\": {\n    \"variableValues\": {\n      \"prospect_name\": \"{{ $('Search records').item.json.firstName }}\",\n      \"company_name\": \"{{ $json.company }}\",\n      \"industry\": \"{{ $json.industry }}\",\n      \"email\":\"{{ $json.email }}\",\n      \"number\":\"{{ $json.phoneNumber }}\",\n      \"prospect_title\": \"{{ $json.jobTitle }}\"\n    }\n  }\n}\n",
+        "options": {}
+      },
+      "id": "eea1ca56-260e-4f81-980a-6f2dd46e0667",
+      "name": "Start Marketing Call (VAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        460,
+        440
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "Calendly_tool",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "9addff6d-2a29-4f02-94a8-d76406987569",
+      "name": "VAPI Call Response Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        -760,
+        980
+      ],
+      "webhookId": "a34ac7ac-7ea4-4942-8dbf-f9ce3f0986e4",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "content": "## Lead Management & Marketing Automation Workflow\n\n- New Lead Trigger: Excel triggers capture new leads when customers are added to the lead management spreadsheet\n\n- Lead Preparation: The system processes and formats lead data, extracting relevant details (name, phone, preferences, booking history)\n\n- Campaign Loop: Automated loop processes through multiple leads for batch marketing campaigns\n\n- Voice Marketing Call: VAPI initiates personalized voice calls to leads with tailored restaurant offers and booking invitations\n\n- Response Tracking: All call results and lead responses are logged back to Excel for campaign analysis\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+        "height": 740,
+        "width": 1440,
+        "color": 3
+      },
+      "id": "f1a84630-df6e-4f6f-8633-b60a712bbd82",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -520,
+        -40
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "\nlist = []\nfor item in _input.all():\n    dict = {}\n    dict['name'] = item.json.get('firstName', '') + \" \" + item.json.get('lastName', '')\n    dict['jobTitle'] = item.json.get('jobTitle', '')\n    dict['email'] = item.json.get('emailAddress', '')\n    dict['industry'] = item.json.get('businessIndustry', '')\n    dict['company'] = item.json.get('companyName', '')\n\n    phone = item.json.get(\"Number\", \"\")  # Safe lookup\n    dict['phoneNumber'] = '+' + phone if phone else \"\"\n\n    list.append(dict)\n\nreturn list\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        460
+      ],
+      "id": "3ee0d161-2924-4d3d-acf7-26d70fd4abc6",
+      "name": "Format and Extract only Required data"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bd7a9d0b-d88d-41bb-83bb-46178fb64cd7",
+              "leftValue": "={{ $json[\"collection\"].length }}\n",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        840,
+        1320
+      ],
+      "id": "ca8d453f-5aa6-407c-908f-983197df8c88",
+      "name": "If2",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"results\": [\n    {\n      \"toolCallId\": \"{{ $('VAPI Call Response Webhook').item.json.body.message.toolCalls[0].id }}\",\n      \"result\": \"📧 An email and a WhatsApp message have been sent to your number with the Calendly link to book a slot. Please book your slot as soon as possible.\"\n    }\n  ]\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -120,
+        980
+      ],
+      "id": "a6ad83f2-f204-43b2-a045-b5dda5e77fc5",
+      "name": "Respond to Webhook2"
+    },
+    {
+      "parameters": {
+        "content": "## Book an Appointment according Asked Slots\n**Send Confirmation Email of the slot is available** to edit me. [Guide](https://docs.n8n.io/workflows/sticky-notes/)",
+        "height": 380,
+        "width": 1480,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -880,
+        820
+      ],
+      "typeVersion": 1,
+      "id": "359d3825-d464-4fa7-8dd2-0d771dba7067",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.calendly.com/event_type/{{ $('Edit Fields').item.json['Event-Type-UUID'] }}/invitees\n",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        1320
+      ],
+      "id": "98c4cd9e-939f-44a6-aaa4-0a630c32c0f9",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2RfEJyCuDakcHWhO",
+          "name": "Header Auth account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "=https://api.calendly.com/user_busy_times\n?user={{ $('Edit Fields').item.json['User-UUID'] }}&start_time={{ $('VAPI Call Response Webhook').item.json.body.message.toolCalls[0].function.arguments.preferred_timeslot }}\n&end_time={{ $json.End_time }}\n",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        1320
+      ],
+      "id": "b7c85aab-5c40-40ba-9f72-b1c4f980f748",
+      "name": "Check Availability",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2RfEJyCuDakcHWhO",
+          "name": "Header Auth account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "=https://api.calendly.com/event_types?user={{ $json.resource.uri }}\n",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -360,
+        1260
+      ],
+      "id": "a702f597-9bfc-41c3-8694-9bf7dca2391f",
+      "name": "Get UUID Of Event Types",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2RfEJyCuDakcHWhO",
+          "name": "Header Auth account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "https://api.calendly.com/users/me",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -580,
+        1260
+      ],
+      "id": "531ffc30-4d1d-4f2e-a629-041bbc2d975b",
+      "name": "Get User URI",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2RfEJyCuDakcHWhO",
+          "name": "Header Auth account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6b63a844-1e1d-495f-82e0-3a231ea13d66",
+              "name": "Event-Type-UUID",
+              "value": "=  {{ $json.collection[3].uri.split('/').pop() }}",
+              "type": "string"
+            },
+            {
+              "id": "c44ff0f3-c661-4a49-aa89-4e42c509436b",
+              "name": "User-UUID",
+              "value": "={{ $json.collection[3].profile.owner}}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -160,
+        1260
+      ],
+      "id": "381459f8-a0dc-460c-809d-194d24e1c82a",
+      "name": "Edit Fields",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c44ff0f3-c661-4a49-aa89-4e42c509436b",
+              "name": "Scheduler-UUID",
+              "value": "={{ $json.collection[0].uri.split('/').pop() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        260,
+        1320
+      ],
+      "id": "135e79d0-b094-4b4e-9ee7-d2cfe639add9",
+      "name": "Edit Fields1",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "=https://api.calendly.com/user_availability_schedules?user={{ $json['User-UUID'] }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        40,
+        1260
+      ],
+      "id": "cc98b7c3-f7b7-4b04-a3c1-3f1737ecd193",
+      "name": "Get Schedule UUID",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2RfEJyCuDakcHWhO",
+          "name": "Header Auth account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "addToDate",
+        "magnitude": "={{ $('VAPI Call Response Webhook').item.json.body.message.toolCalls[0].function.arguments.preferred_timeslot }}",
+        "timeUnit": "minutes",
+        "duration": 30,
+        "outputFieldName": "End_time",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dateTime",
+      "typeVersion": 2,
+      "position": [
+        460,
+        1320
+      ],
+      "id": "752aa610-cad7-49f9-93e8-c3041acc6200",
+      "name": "Add Default slot Time",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": {
+          "__rl": true,
+          "value": "appWZpiYs12BGWwIg",
+          "mode": "list",
+          "cachedResultName": "Protect Fortune Leads",
+          "cachedResultUrl": "https://airtable.com/appWZpiYs12BGWwIg"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbl7PskKM3i8kHQOc",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://airtable.com/appWZpiYs12BGWwIg/tbl7PskKM3i8kHQOc"
+        },
+        "filterByFormula": "({Call}='To Do')",
+        "returnAll": false,
+        "limit": 1,
+        "options": {
+          "fields": [
+            "Call",
+            "firstName",
+            "emailAddress",
+            "jobTitle",
+            "companyName",
+            "Number",
+            "lastName",
+            "businessIndustry"
+          ],
+          "view": {
+            "__rl": true,
+            "value": "viwB1NDCiiP2tpARv",
+            "mode": "list",
+            "cachedResultName": "Grid view",
+            "cachedResultUrl": "https://airtable.com/appWZpiYs12BGWwIg/tbl7PskKM3i8kHQOc/viwB1NDCiiP2tpARv"
+          }
+        }
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -240,
+        460
+      ],
+      "id": "b20063ad-6fdc-448a-861f-771f93caf27a",
+      "name": "Search records",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "X9XbgQ1K3md9fhJ9",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/4 11-16 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -440,
+        460
+      ],
+      "id": "8bbc0a3b-8db4-424b-a540-8e5dfd2adc09",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "from": "+18773137870",
+        "to": "={{ $json.body.message.call.assistantOverrides.variableValues.number }}",
+        "message": "=Hello {{ $json.body.message.customer.name }},\n\nI’d like to invite you to book a quick consultation with Protect Fortunes to explore strategies for tax-efficient retirement, post-retirement security, and long-term financial growth.\nOpen this and select your slot\n👉https://calendly.com/kolibkris/consultation-meeting\n\nLooking forward to connecting,\nProtect Fortunes Team\n📧 contact@protectfortunes.com\n🌐 www.protectfortunes.com",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.twilio",
+      "typeVersion": 1,
+      "position": [
+        -540,
+        980
+      ],
+      "id": "4d1593ec-f935-418f-9bbd-1cf540ef10e7",
+      "name": "Send an SMS/MMS/WhatsApp message",
+      "credentials": {
+        "twilioApi": {
+          "id": "varBzLaO5GNxkIkJ",
+          "name": "Twilio account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('VAPI Call Response Webhook').item.json.body.message.call.customer.email }}",
+        "subject": "Schedule Your Appointment with Protect Fortunes",
+        "emailType": "text",
+        "message": "=Hello {{ $('VAPI Call Response Webhook').item.json.body.message.call.assistantOverrides.variableValues.prospect_name }},\nI’d like to invite you to book a convenient time for a short consultation with Protect Fortunes. In this meeting, we’ll walk you through strategies that can:  Show appreciation for your hard work with long-term benefits  Reduce your retirement tax burden with Indexed Universal Life (IUL) plans  Provide post-retirement security and cash value growth  Offer cost-effective incentives for both employees and employers  To keep scheduling simple and secure, we use Calendly, a trusted booking platform. Please click the link below and select the time slot that best fits your schedule: \n👉https://calendly.com/kolibkris/consultation-meeting\nThis session is designed to give you clarity on how our plans can support your financial growth, protection, and peace of mind.  Looking forward to connecting with you, Protect Fortunes Team 📧 contact@protectfortunes.com  | 🌐 www.protectfortunes.com",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -320,
+        980
+      ],
+      "id": "711ab2d5-cfde-4443-bfed-b7291dd6c092",
+      "name": "Send a message",
+      "webhookId": "23c83e39-3eed-442f-bf2d-599b24437f82",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "rJXRY4nyfHDlx6Bh",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "appWZpiYs12BGWwIg",
+          "mode": "list",
+          "cachedResultName": "Protect Fortune Leads",
+          "cachedResultUrl": "https://airtable.com/appWZpiYs12BGWwIg"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbl7PskKM3i8kHQOc",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://airtable.com/appWZpiYs12BGWwIg/tbl7PskKM3i8kHQOc"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Call": "Done",
+            "id": "={{ $('Search records').item.json.id }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "firstName",
+              "displayName": "firstName",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "emailAddress",
+              "displayName": "emailAddress",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "linkedInURL",
+              "displayName": "linkedInURL",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "seniority ",
+              "displayName": "seniority ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "director",
+                  "value": "director"
+                },
+                {
+                  "name": "entry",
+                  "value": "entry"
+                },
+                {
+                  "name": "vp",
+                  "value": "vp"
+                },
+                {
+                  "name": "owner",
+                  "value": "owner"
+                },
+                {
+                  "name": "manager",
+                  "value": "manager"
+                },
+                {
+                  "name": "founder",
+                  "value": "founder"
+                },
+                {
+                  "name": "senior",
+                  "value": "senior"
+                },
+                {
+                  "name": "partner",
+                  "value": "partner"
+                },
+                {
+                  "name": "c_suite",
+                  "value": "c_suite"
+                },
+                {
+                  "name": "head",
+                  "value": "head"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "jobTitle",
+              "displayName": "jobTitle",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "companyName",
+              "displayName": "companyName",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "location",
+              "displayName": "location",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "country",
+              "displayName": "country",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "United States",
+                  "value": "United States"
+                },
+                {
+                  "name": "Switzerland",
+                  "value": "Switzerland"
+                },
+                {
+                  "name": "India",
+                  "value": "India"
+                },
+                {
+                  "name": "Germany",
+                  "value": "Germany"
+                },
+                {
+                  "name": "United Kingdom",
+                  "value": "United Kingdom"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Number",
+              "displayName": "Number",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "websiteURL",
+              "displayName": "websiteURL",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "businessIndustry",
+              "displayName": "businessIndustry",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "machinery",
+                  "value": "machinery"
+                },
+                {
+                  "name": "mechanical or industrial engineering",
+                  "value": "mechanical or industrial engineering"
+                },
+                {
+                  "name": "sports",
+                  "value": "sports"
+                },
+                {
+                  "name": "apparel & fashion",
+                  "value": "apparel & fashion"
+                },
+                {
+                  "name": "retail",
+                  "value": "retail"
+                },
+                {
+                  "name": "plastics",
+                  "value": "plastics"
+                },
+                {
+                  "name": "construction",
+                  "value": "construction"
+                },
+                {
+                  "name": "logistics & supply chain",
+                  "value": "logistics & supply chain"
+                },
+                {
+                  "name": "public safety",
+                  "value": "public safety"
+                },
+                {
+                  "name": "electrical/electronic manufacturing",
+                  "value": "electrical/electronic manufacturing"
+                },
+                {
+                  "name": "sporting goods",
+                  "value": "sporting goods"
+                },
+                {
+                  "name": "financial services",
+                  "value": "financial services"
+                },
+                {
+                  "name": "furniture",
+                  "value": "furniture"
+                },
+                {
+                  "name": "aviation & aerospace",
+                  "value": "aviation & aerospace"
+                },
+                {
+                  "name": "semiconductors",
+                  "value": "semiconductors"
+                },
+                {
+                  "name": "food & beverages",
+                  "value": "food & beverages"
+                },
+                {
+                  "name": "food production",
+                  "value": "food production"
+                },
+                {
+                  "name": "health, wellness & fitness",
+                  "value": "health, wellness & fitness"
+                },
+                {
+                  "name": "medical devices",
+                  "value": "medical devices"
+                },
+                {
+                  "name": "automotive",
+                  "value": "automotive"
+                },
+                {
+                  "name": "wholesale",
+                  "value": "wholesale"
+                },
+                {
+                  "name": "information technology & services",
+                  "value": "information technology & services"
+                },
+                {
+                  "name": "consumer goods",
+                  "value": "consumer goods"
+                },
+                {
+                  "name": "glass, ceramics & concrete",
+                  "value": "glass, ceramics & concrete"
+                },
+                {
+                  "name": "staffing & recruiting",
+                  "value": "staffing & recruiting"
+                },
+                {
+                  "name": "printing",
+                  "value": "printing"
+                },
+                {
+                  "name": "accounting",
+                  "value": "accounting"
+                },
+                {
+                  "name": "design",
+                  "value": "design"
+                },
+                {
+                  "name": "telecommunications",
+                  "value": "telecommunications"
+                },
+                {
+                  "name": "mining & metals",
+                  "value": "mining & metals"
+                },
+                {
+                  "name": "oil & energy",
+                  "value": "oil & energy"
+                },
+                {
+                  "name": "alternative medicine",
+                  "value": "alternative medicine"
+                },
+                {
+                  "name": "fine art",
+                  "value": "fine art"
+                },
+                {
+                  "name": "computer hardware",
+                  "value": "computer hardware"
+                },
+                {
+                  "name": "entertainment",
+                  "value": "entertainment"
+                },
+                {
+                  "name": "security & investigations",
+                  "value": "security & investigations"
+                },
+                {
+                  "name": "pharmaceuticals",
+                  "value": "pharmaceuticals"
+                },
+                {
+                  "name": "textiles",
+                  "value": "textiles"
+                },
+                {
+                  "name": "packaging & containers",
+                  "value": "packaging & containers"
+                },
+                {
+                  "name": "renewables & environment",
+                  "value": "renewables & environment"
+                },
+                {
+                  "name": "architecture & planning",
+                  "value": "architecture & planning"
+                },
+                {
+                  "name": "airlines/aviation",
+                  "value": "airlines/aviation"
+                },
+                {
+                  "name": "marketing & advertising",
+                  "value": "marketing & advertising"
+                },
+                {
+                  "name": "consumer services",
+                  "value": "consumer services"
+                },
+                {
+                  "name": "paper & forest products",
+                  "value": "paper & forest products"
+                },
+                {
+                  "name": "luxury goods & jewelry",
+                  "value": "luxury goods & jewelry"
+                },
+                {
+                  "name": "chemicals",
+                  "value": "chemicals"
+                },
+                {
+                  "name": "facilities services",
+                  "value": "facilities services"
+                },
+                {
+                  "name": "building materials",
+                  "value": "building materials"
+                },
+                {
+                  "name": "management consulting",
+                  "value": "management consulting"
+                },
+                {
+                  "name": "real estate",
+                  "value": "real estate"
+                },
+                {
+                  "name": "environmental services",
+                  "value": "environmental services"
+                },
+                {
+                  "name": "hospital & health care",
+                  "value": "hospital & health care"
+                },
+                {
+                  "name": "transportation/trucking/railroad",
+                  "value": "transportation/trucking/railroad"
+                },
+                {
+                  "name": "education management",
+                  "value": "education management"
+                },
+                {
+                  "name": "banking",
+                  "value": "banking"
+                },
+                {
+                  "name": "hospitality",
+                  "value": "hospitality"
+                },
+                {
+                  "name": "warehousing",
+                  "value": "warehousing"
+                },
+                {
+                  "name": "executive office",
+                  "value": "executive office"
+                },
+                {
+                  "name": "professional training & coaching",
+                  "value": "professional training & coaching"
+                },
+                {
+                  "name": "writing & editing",
+                  "value": "writing & editing"
+                },
+                {
+                  "name": "law practice",
+                  "value": "law practice"
+                },
+                {
+                  "name": "wireless",
+                  "value": "wireless"
+                },
+                {
+                  "name": "defense & space",
+                  "value": "defense & space"
+                },
+                {
+                  "name": "insurance",
+                  "value": "insurance"
+                },
+                {
+                  "name": "restaurants",
+                  "value": "restaurants"
+                },
+                {
+                  "name": "tobacco",
+                  "value": "tobacco"
+                },
+                {
+                  "name": "outsourcing/offshoring",
+                  "value": "outsourcing/offshoring"
+                },
+                {
+                  "name": "venture capital & private equity",
+                  "value": "venture capital & private equity"
+                },
+                {
+                  "name": "computer games",
+                  "value": "computer games"
+                },
+                {
+                  "name": "industrial automation",
+                  "value": "industrial automation"
+                },
+                {
+                  "name": "investment management",
+                  "value": "investment management"
+                },
+                {
+                  "name": "information services",
+                  "value": "information services"
+                },
+                {
+                  "name": "events services",
+                  "value": "events services"
+                },
+                {
+                  "name": "wine & spirits",
+                  "value": "wine & spirits"
+                },
+                {
+                  "name": "research",
+                  "value": "research"
+                },
+                {
+                  "name": "computer & network security",
+                  "value": "computer & network security"
+                },
+                {
+                  "name": "investment banking",
+                  "value": "investment banking"
+                },
+                {
+                  "name": "recreational facilities & services",
+                  "value": "recreational facilities & services"
+                },
+                {
+                  "name": "import & export",
+                  "value": "import & export"
+                },
+                {
+                  "name": "railroad manufacture",
+                  "value": "railroad manufacture"
+                },
+                {
+                  "name": "nonprofit organization management",
+                  "value": "nonprofit organization management"
+                },
+                {
+                  "name": "translation & localization",
+                  "value": "translation & localization"
+                },
+                {
+                  "name": "civic & social organization",
+                  "value": "civic & social organization"
+                },
+                {
+                  "name": "international trade & development",
+                  "value": "international trade & development"
+                },
+                {
+                  "name": "government relations",
+                  "value": "government relations"
+                },
+                {
+                  "name": "medical practice",
+                  "value": "medical practice"
+                },
+                {
+                  "name": "farming",
+                  "value": "farming"
+                },
+                {
+                  "name": "maritime",
+                  "value": "maritime"
+                },
+                {
+                  "name": "biotechnology",
+                  "value": "biotechnology"
+                },
+                {
+                  "name": "government administration",
+                  "value": "government administration"
+                },
+                {
+                  "name": "nanotechnology",
+                  "value": "nanotechnology"
+                },
+                {
+                  "name": "utilities",
+                  "value": "utilities"
+                },
+                {
+                  "name": "dairy",
+                  "value": "dairy"
+                },
+                {
+                  "name": "e-learning",
+                  "value": "e-learning"
+                },
+                {
+                  "name": "market research",
+                  "value": "market research"
+                },
+                {
+                  "name": "business supplies & equipment",
+                  "value": "business supplies & equipment"
+                },
+                {
+                  "name": "consumer electronics",
+                  "value": "consumer electronics"
+                },
+                {
+                  "name": "public relations & communications",
+                  "value": "public relations & communications"
+                },
+                {
+                  "name": "media production",
+                  "value": "media production"
+                },
+                {
+                  "name": "computer networking",
+                  "value": "computer networking"
+                },
+                {
+                  "name": "shipbuilding",
+                  "value": "shipbuilding"
+                },
+                {
+                  "name": "civil engineering",
+                  "value": "civil engineering"
+                },
+                {
+                  "name": "human resources",
+                  "value": "human resources"
+                },
+                {
+                  "name": "capital markets",
+                  "value": "capital markets"
+                },
+                {
+                  "name": "online media",
+                  "value": "online media"
+                },
+                {
+                  "name": "religious institutions",
+                  "value": "religious institutions"
+                },
+                {
+                  "name": "graphic design",
+                  "value": "graphic design"
+                },
+                {
+                  "name": "gambling & casinos",
+                  "value": "gambling & casinos"
+                },
+                {
+                  "name": "internet",
+                  "value": "internet"
+                },
+                {
+                  "name": "higher education",
+                  "value": "higher education"
+                },
+                {
+                  "name": "veterinary",
+                  "value": "veterinary"
+                },
+                {
+                  "name": "music",
+                  "value": "music"
+                },
+                {
+                  "name": "fishery",
+                  "value": "fishery"
+                },
+                {
+                  "name": "legal services",
+                  "value": "legal services"
+                },
+                {
+                  "name": "program development",
+                  "value": "program development"
+                },
+                {
+                  "name": "think tanks",
+                  "value": "think tanks"
+                },
+                {
+                  "name": "cosmetics",
+                  "value": "cosmetics"
+                },
+                {
+                  "name": "primary/secondary education",
+                  "value": "primary/secondary education"
+                },
+                {
+                  "name": "package/freight delivery",
+                  "value": "package/freight delivery"
+                },
+                {
+                  "name": "commercial real estate",
+                  "value": "commercial real estate"
+                },
+                {
+                  "name": "photography",
+                  "value": "photography"
+                },
+                {
+                  "name": "animation",
+                  "value": "animation"
+                },
+                {
+                  "name": "military",
+                  "value": "military"
+                },
+                {
+                  "name": "international affairs",
+                  "value": "international affairs"
+                },
+                {
+                  "name": "individual & family services",
+                  "value": "individual & family services"
+                },
+                {
+                  "name": "leisure, travel & tourism",
+                  "value": "leisure, travel & tourism"
+                },
+                {
+                  "name": "libraries",
+                  "value": "libraries"
+                },
+                {
+                  "name": "publishing",
+                  "value": "publishing"
+                },
+                {
+                  "name": "fund-raising",
+                  "value": "fund-raising"
+                },
+                {
+                  "name": "arts & crafts",
+                  "value": "arts & crafts"
+                },
+                {
+                  "name": "mental health care",
+                  "value": "mental health care"
+                },
+                {
+                  "name": "law enforcement",
+                  "value": "law enforcement"
+                },
+                {
+                  "name": "political organization",
+                  "value": "political organization"
+                },
+                {
+                  "name": "public policy",
+                  "value": "public policy"
+                },
+                {
+                  "name": "performing arts",
+                  "value": "performing arts"
+                },
+                {
+                  "name": "philanthropy",
+                  "value": "philanthropy"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "lastName",
+              "displayName": "lastName",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "emailStatus",
+              "displayName": "emailStatus",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "verified",
+                  "value": "verified"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "milestone",
+              "displayName": "milestone",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "reasoning",
+              "displayName": "reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "postUrl",
+              "displayName": "postUrl",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Call",
+              "displayName": "Call",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "To Do",
+                  "value": "To Do"
+                },
+                {
+                  "name": "Done",
+                  "value": "Done"
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        700,
+        400
+      ],
+      "id": "1f25db80-f234-43da-bdb0-b8eed70cbc39",
+      "name": "Create or update a record",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "X9XbgQ1K3md9fhJ9",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7dc0d859-7c8e-4722-8b01-33fdd470132c",
+              "leftValue": "={{ $json.phoneNumber }}",
+              "rightValue": "=",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        180,
+        440
+      ],
+      "id": "212f7444-a311-4071-af54-f2ec3683c5e9",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "base": {
+          "__rl": true,
+          "value": "appWZpiYs12BGWwIg",
+          "mode": "list",
+          "cachedResultName": "Protect Fortune Leads",
+          "cachedResultUrl": "https://airtable.com/appWZpiYs12BGWwIg"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tbl7PskKM3i8kHQOc",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://airtable.com/appWZpiYs12BGWwIg/tbl7PskKM3i8kHQOc"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Call": "Number not Found",
+            "id": "={{ $('Search records').item.json.id }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "firstName",
+              "displayName": "firstName",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "emailAddress",
+              "displayName": "emailAddress",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "linkedInURL",
+              "displayName": "linkedInURL",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "seniority ",
+              "displayName": "seniority ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "director",
+                  "value": "director"
+                },
+                {
+                  "name": "entry",
+                  "value": "entry"
+                },
+                {
+                  "name": "vp",
+                  "value": "vp"
+                },
+                {
+                  "name": "owner",
+                  "value": "owner"
+                },
+                {
+                  "name": "manager",
+                  "value": "manager"
+                },
+                {
+                  "name": "founder",
+                  "value": "founder"
+                },
+                {
+                  "name": "senior",
+                  "value": "senior"
+                },
+                {
+                  "name": "partner",
+                  "value": "partner"
+                },
+                {
+                  "name": "c_suite",
+                  "value": "c_suite"
+                },
+                {
+                  "name": "head",
+                  "value": "head"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "jobTitle",
+              "displayName": "jobTitle",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "companyName",
+              "displayName": "companyName",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "location",
+              "displayName": "location",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "country",
+              "displayName": "country",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "United States",
+                  "value": "United States"
+                },
+                {
+                  "name": "Switzerland",
+                  "value": "Switzerland"
+                },
+                {
+                  "name": "India",
+                  "value": "India"
+                },
+                {
+                  "name": "Germany",
+                  "value": "Germany"
+                },
+                {
+                  "name": "United Kingdom",
+                  "value": "United Kingdom"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Number",
+              "displayName": "Number",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "websiteURL",
+              "displayName": "websiteURL",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "businessIndustry",
+              "displayName": "businessIndustry",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "machinery",
+                  "value": "machinery"
+                },
+                {
+                  "name": "mechanical or industrial engineering",
+                  "value": "mechanical or industrial engineering"
+                },
+                {
+                  "name": "sports",
+                  "value": "sports"
+                },
+                {
+                  "name": "apparel & fashion",
+                  "value": "apparel & fashion"
+                },
+                {
+                  "name": "retail",
+                  "value": "retail"
+                },
+                {
+                  "name": "plastics",
+                  "value": "plastics"
+                },
+                {
+                  "name": "construction",
+                  "value": "construction"
+                },
+                {
+                  "name": "logistics & supply chain",
+                  "value": "logistics & supply chain"
+                },
+                {
+                  "name": "public safety",
+                  "value": "public safety"
+                },
+                {
+                  "name": "electrical/electronic manufacturing",
+                  "value": "electrical/electronic manufacturing"
+                },
+                {
+                  "name": "sporting goods",
+                  "value": "sporting goods"
+                },
+                {
+                  "name": "financial services",
+                  "value": "financial services"
+                },
+                {
+                  "name": "furniture",
+                  "value": "furniture"
+                },
+                {
+                  "name": "aviation & aerospace",
+                  "value": "aviation & aerospace"
+                },
+                {
+                  "name": "semiconductors",
+                  "value": "semiconductors"
+                },
+                {
+                  "name": "food & beverages",
+                  "value": "food & beverages"
+                },
+                {
+                  "name": "food production",
+                  "value": "food production"
+                },
+                {
+                  "name": "health, wellness & fitness",
+                  "value": "health, wellness & fitness"
+                },
+                {
+                  "name": "medical devices",
+                  "value": "medical devices"
+                },
+                {
+                  "name": "automotive",
+                  "value": "automotive"
+                },
+                {
+                  "name": "wholesale",
+                  "value": "wholesale"
+                },
+                {
+                  "name": "information technology & services",
+                  "value": "information technology & services"
+                },
+                {
+                  "name": "consumer goods",
+                  "value": "consumer goods"
+                },
+                {
+                  "name": "glass, ceramics & concrete",
+                  "value": "glass, ceramics & concrete"
+                },
+                {
+                  "name": "staffing & recruiting",
+                  "value": "staffing & recruiting"
+                },
+                {
+                  "name": "printing",
+                  "value": "printing"
+                },
+                {
+                  "name": "accounting",
+                  "value": "accounting"
+                },
+                {
+                  "name": "design",
+                  "value": "design"
+                },
+                {
+                  "name": "telecommunications",
+                  "value": "telecommunications"
+                },
+                {
+                  "name": "mining & metals",
+                  "value": "mining & metals"
+                },
+                {
+                  "name": "oil & energy",
+                  "value": "oil & energy"
+                },
+                {
+                  "name": "alternative medicine",
+                  "value": "alternative medicine"
+                },
+                {
+                  "name": "fine art",
+                  "value": "fine art"
+                },
+                {
+                  "name": "computer hardware",
+                  "value": "computer hardware"
+                },
+                {
+                  "name": "entertainment",
+                  "value": "entertainment"
+                },
+                {
+                  "name": "security & investigations",
+                  "value": "security & investigations"
+                },
+                {
+                  "name": "pharmaceuticals",
+                  "value": "pharmaceuticals"
+                },
+                {
+                  "name": "textiles",
+                  "value": "textiles"
+                },
+                {
+                  "name": "packaging & containers",
+                  "value": "packaging & containers"
+                },
+                {
+                  "name": "renewables & environment",
+                  "value": "renewables & environment"
+                },
+                {
+                  "name": "architecture & planning",
+                  "value": "architecture & planning"
+                },
+                {
+                  "name": "airlines/aviation",
+                  "value": "airlines/aviation"
+                },
+                {
+                  "name": "marketing & advertising",
+                  "value": "marketing & advertising"
+                },
+                {
+                  "name": "consumer services",
+                  "value": "consumer services"
+                },
+                {
+                  "name": "paper & forest products",
+                  "value": "paper & forest products"
+                },
+                {
+                  "name": "luxury goods & jewelry",
+                  "value": "luxury goods & jewelry"
+                },
+                {
+                  "name": "chemicals",
+                  "value": "chemicals"
+                },
+                {
+                  "name": "facilities services",
+                  "value": "facilities services"
+                },
+                {
+                  "name": "building materials",
+                  "value": "building materials"
+                },
+                {
+                  "name": "management consulting",
+                  "value": "management consulting"
+                },
+                {
+                  "name": "real estate",
+                  "value": "real estate"
+                },
+                {
+                  "name": "environmental services",
+                  "value": "environmental services"
+                },
+                {
+                  "name": "hospital & health care",
+                  "value": "hospital & health care"
+                },
+                {
+                  "name": "transportation/trucking/railroad",
+                  "value": "transportation/trucking/railroad"
+                },
+                {
+                  "name": "education management",
+                  "value": "education management"
+                },
+                {
+                  "name": "banking",
+                  "value": "banking"
+                },
+                {
+                  "name": "hospitality",
+                  "value": "hospitality"
+                },
+                {
+                  "name": "warehousing",
+                  "value": "warehousing"
+                },
+                {
+                  "name": "executive office",
+                  "value": "executive office"
+                },
+                {
+                  "name": "professional training & coaching",
+                  "value": "professional training & coaching"
+                },
+                {
+                  "name": "writing & editing",
+                  "value": "writing & editing"
+                },
+                {
+                  "name": "law practice",
+                  "value": "law practice"
+                },
+                {
+                  "name": "wireless",
+                  "value": "wireless"
+                },
+                {
+                  "name": "defense & space",
+                  "value": "defense & space"
+                },
+                {
+                  "name": "insurance",
+                  "value": "insurance"
+                },
+                {
+                  "name": "restaurants",
+                  "value": "restaurants"
+                },
+                {
+                  "name": "tobacco",
+                  "value": "tobacco"
+                },
+                {
+                  "name": "outsourcing/offshoring",
+                  "value": "outsourcing/offshoring"
+                },
+                {
+                  "name": "venture capital & private equity",
+                  "value": "venture capital & private equity"
+                },
+                {
+                  "name": "computer games",
+                  "value": "computer games"
+                },
+                {
+                  "name": "industrial automation",
+                  "value": "industrial automation"
+                },
+                {
+                  "name": "investment management",
+                  "value": "investment management"
+                },
+                {
+                  "name": "information services",
+                  "value": "information services"
+                },
+                {
+                  "name": "events services",
+                  "value": "events services"
+                },
+                {
+                  "name": "wine & spirits",
+                  "value": "wine & spirits"
+                },
+                {
+                  "name": "research",
+                  "value": "research"
+                },
+                {
+                  "name": "computer & network security",
+                  "value": "computer & network security"
+                },
+                {
+                  "name": "investment banking",
+                  "value": "investment banking"
+                },
+                {
+                  "name": "recreational facilities & services",
+                  "value": "recreational facilities & services"
+                },
+                {
+                  "name": "import & export",
+                  "value": "import & export"
+                },
+                {
+                  "name": "railroad manufacture",
+                  "value": "railroad manufacture"
+                },
+                {
+                  "name": "nonprofit organization management",
+                  "value": "nonprofit organization management"
+                },
+                {
+                  "name": "translation & localization",
+                  "value": "translation & localization"
+                },
+                {
+                  "name": "civic & social organization",
+                  "value": "civic & social organization"
+                },
+                {
+                  "name": "international trade & development",
+                  "value": "international trade & development"
+                },
+                {
+                  "name": "government relations",
+                  "value": "government relations"
+                },
+                {
+                  "name": "medical practice",
+                  "value": "medical practice"
+                },
+                {
+                  "name": "farming",
+                  "value": "farming"
+                },
+                {
+                  "name": "maritime",
+                  "value": "maritime"
+                },
+                {
+                  "name": "biotechnology",
+                  "value": "biotechnology"
+                },
+                {
+                  "name": "government administration",
+                  "value": "government administration"
+                },
+                {
+                  "name": "nanotechnology",
+                  "value": "nanotechnology"
+                },
+                {
+                  "name": "utilities",
+                  "value": "utilities"
+                },
+                {
+                  "name": "dairy",
+                  "value": "dairy"
+                },
+                {
+                  "name": "e-learning",
+                  "value": "e-learning"
+                },
+                {
+                  "name": "market research",
+                  "value": "market research"
+                },
+                {
+                  "name": "business supplies & equipment",
+                  "value": "business supplies & equipment"
+                },
+                {
+                  "name": "consumer electronics",
+                  "value": "consumer electronics"
+                },
+                {
+                  "name": "public relations & communications",
+                  "value": "public relations & communications"
+                },
+                {
+                  "name": "media production",
+                  "value": "media production"
+                },
+                {
+                  "name": "computer networking",
+                  "value": "computer networking"
+                },
+                {
+                  "name": "shipbuilding",
+                  "value": "shipbuilding"
+                },
+                {
+                  "name": "civil engineering",
+                  "value": "civil engineering"
+                },
+                {
+                  "name": "human resources",
+                  "value": "human resources"
+                },
+                {
+                  "name": "capital markets",
+                  "value": "capital markets"
+                },
+                {
+                  "name": "online media",
+                  "value": "online media"
+                },
+                {
+                  "name": "religious institutions",
+                  "value": "religious institutions"
+                },
+                {
+                  "name": "graphic design",
+                  "value": "graphic design"
+                },
+                {
+                  "name": "gambling & casinos",
+                  "value": "gambling & casinos"
+                },
+                {
+                  "name": "internet",
+                  "value": "internet"
+                },
+                {
+                  "name": "higher education",
+                  "value": "higher education"
+                },
+                {
+                  "name": "veterinary",
+                  "value": "veterinary"
+                },
+                {
+                  "name": "music",
+                  "value": "music"
+                },
+                {
+                  "name": "fishery",
+                  "value": "fishery"
+                },
+                {
+                  "name": "legal services",
+                  "value": "legal services"
+                },
+                {
+                  "name": "program development",
+                  "value": "program development"
+                },
+                {
+                  "name": "think tanks",
+                  "value": "think tanks"
+                },
+                {
+                  "name": "cosmetics",
+                  "value": "cosmetics"
+                },
+                {
+                  "name": "primary/secondary education",
+                  "value": "primary/secondary education"
+                },
+                {
+                  "name": "package/freight delivery",
+                  "value": "package/freight delivery"
+                },
+                {
+                  "name": "commercial real estate",
+                  "value": "commercial real estate"
+                },
+                {
+                  "name": "photography",
+                  "value": "photography"
+                },
+                {
+                  "name": "animation",
+                  "value": "animation"
+                },
+                {
+                  "name": "military",
+                  "value": "military"
+                },
+                {
+                  "name": "international affairs",
+                  "value": "international affairs"
+                },
+                {
+                  "name": "individual & family services",
+                  "value": "individual & family services"
+                },
+                {
+                  "name": "leisure, travel & tourism",
+                  "value": "leisure, travel & tourism"
+                },
+                {
+                  "name": "libraries",
+                  "value": "libraries"
+                },
+                {
+                  "name": "publishing",
+                  "value": "publishing"
+                },
+                {
+                  "name": "fund-raising",
+                  "value": "fund-raising"
+                },
+                {
+                  "name": "arts & crafts",
+                  "value": "arts & crafts"
+                },
+                {
+                  "name": "mental health care",
+                  "value": "mental health care"
+                },
+                {
+                  "name": "law enforcement",
+                  "value": "law enforcement"
+                },
+                {
+                  "name": "political organization",
+                  "value": "political organization"
+                },
+                {
+                  "name": "public policy",
+                  "value": "public policy"
+                },
+                {
+                  "name": "performing arts",
+                  "value": "performing arts"
+                },
+                {
+                  "name": "philanthropy",
+                  "value": "philanthropy"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "lastName",
+              "displayName": "lastName",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "emailStatus",
+              "displayName": "emailStatus",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "verified",
+                  "value": "verified"
+                }
+              ],
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "milestone",
+              "displayName": "milestone",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "reasoning",
+              "displayName": "reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "postUrl",
+              "displayName": "postUrl",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Call",
+              "displayName": "Call",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "options",
+              "options": [
+                {
+                  "name": "To Do",
+                  "value": "To Do"
+                },
+                {
+                  "name": "Done",
+                  "value": "Done"
+                },
+                {
+                  "name": "Number not Found",
+                  "value": "Number not Found"
+                },
+                {
+                  "name": "",
+                  "value": ""
+                }
+              ],
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        360,
+        240
+      ],
+      "id": "015c7cdb-15e5-4289-8ee7-984fec3d695d",
+      "name": "Update record",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "X9XbgQ1K3md9fhJ9",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "VAPI Call Response Webhook": {
+      "main": [
+        [
+          {
+            "node": "Send an SMS/MMS/WhatsApp message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Marketing Call (VAPI)": {
+      "main": [
+        [
+          {
+            "node": "Create or update a record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format and Extract only Required data": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Check Availability": {
+      "main": [
+        [
+          {
+            "node": "If2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get UUID Of Event Types": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get User URI": {
+      "main": [
+        [
+          {
+            "node": "Get UUID Of Event Types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Get Schedule UUID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Add Default slot Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Schedule UUID": {
+      "main": [
+        []
+      ]
+    },
+    "Add Default slot Time": {
+      "main": [
+        [
+          {
+            "node": "Check Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        []
+      ]
+    },
+    "Search records": {
+      "main": [
+        [
+          {
+            "node": "Format and Extract only Required data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Search records",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an SMS/MMS/WhatsApp message": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Update record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Start Marketing Call (VAPI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "timezone": "America/Chicago",
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v0"
+  },
+  "versionId": "dcb8ea4c-550a-42a1-bbad-91bf14d05e46",
+  "meta": {
+    "templateId": "5890",
+    "templateCredsSetupCompleted": true,
+    "instanceId": "90ef2d4e027eed2628dad3f353492b4b9186354b01db78bd56867e2c365cdebc"
+  },
+  "id": "7Ynt3yzCrhTO6xM0",
+  "tags": []
+}
