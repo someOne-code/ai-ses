@@ -135,7 +135,6 @@ ai-ses/
     n8n/            project-owned workflow asset'leri
   references/       yerel referans repolar ve ornekler
   scripts/          local runtime yardimci scriptleri
-  AGENTS.md         repo-level calisma kurallari
 ```
 
 ### Backend Dizinleri
@@ -501,7 +500,6 @@ Plan ve kod durumuna gore mantikli sonraki katmanlar:
 
 Baslangic icin en faydali dosyalar:
 
-- `AGENTS.md`
 - `docs/project-plan.md`
 - `docs/reference-map.md`
 - `docs/backend-foundation.md`
@@ -510,7 +508,6 @@ Baslangic icin en faydali dosyalar:
 - `docs/verification-sprint.md`
 - `docs/local-n8n-runbook.md`
 - `docs/review-checklist.md`
-- `docs/agent-playbook.md`
 
 ## Referanslar
 
