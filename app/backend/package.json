@@ -17,6 +17,7 @@
     "smoke:n8n-local-chain": "node --import tsx --test test/n8n-chained-runtime-smoke.test.ts",
     "smoke:retell-web-call": "tsx scripts/retell-web-call-smoke.ts",
     "smoke:gemini-embedding": "tsx scripts/gemini-embedding-smoke.ts",
+    "retell:export-config": "tsx scripts/export-retell-config.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"

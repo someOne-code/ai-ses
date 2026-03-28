@@ -280,6 +280,31 @@ test("search_listings contract tells the agent to drop stale subjective intent a
   );
 });
 
+test("search and detail contracts separate shortlist answers from selected-listing detail lookup", () => {
+  const searchTool = retellToolContracts.find(
+    (tool) => tool.name === "search_listings"
+  );
+  const referenceTool = retellToolContracts.find(
+    (tool) => tool.name === "get_listing_by_reference"
+  );
+
+  assert.ok(searchTool);
+  assert.ok(referenceTool);
+  assert.match(searchTool.description, /shortlist-level search output/i);
+  assert.match(
+    searchTool.description,
+    /call get_listing_by_reference with that listing's verified referenceCode before answering/i
+  );
+  assert.match(
+    searchTool.description,
+    /dues|aidat|building age|floor|elevator|balcony|parking|address/i
+  );
+  assert.match(
+    referenceTool.description,
+    /follow-up detail questions about one selected listing/i
+  );
+});
+
 test("tool contracts forbid reading internal structure or raw formatting aloud", () => {
   const searchTool = retellToolContracts.find(
     (tool) => tool.name === "search_listings"
@@ -784,6 +809,14 @@ test("POST /v1/retell/tools rejects raw reference codes for create_showing_reque
   assert.equal(response.json().ok, false);
   assert.equal(response.json().tool, "create_showing_request");
   assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(
+    response.json().error.message,
+    "Talebi oluşturmak için bazı bilgileri yeniden teyit etmem gerekiyor."
+  );
+  assert.doesNotMatch(
+    response.json().error.message,
+    /Invalid|UUID|reference code/i
+  );
 
   await app.close();
 });
@@ -1041,6 +1074,11 @@ test("POST /v1/retell/tools returns structured domain errors without changing HT
   assert.equal(response.json().ok, false);
   assert.equal(response.json().tool, "get_listing_by_reference");
   assert.equal(response.json().error.code, "LISTING_NOT_FOUND");
+  assert.equal(response.json().error.message, "\u0130lgili ilan\u0131 bulamad\u0131m.");
+  assert.doesNotMatch(
+    response.json().error.message,
+    /Listing not found|reference code|Invalid/i
+  );
   assert.equal(retellRepository.auditEvents.length, 1);
   assert.equal(retellRepository.auditEvents[0]?.action, "retell.tool.failed");
 

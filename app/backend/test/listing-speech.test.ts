@@ -47,21 +47,28 @@ test("formatTurkishNumberForSpeech produces deterministic Turkish words for high
 test("formatReferenceCodeForSpeech preserves tokens and reads digits separately", () => {
   assert.equal(
     formatReferenceCodeForSpeech("DEMO-IST-3401"),
-    "DEMO - IST - 3 4 0 1"
+    "DEMO - IST - \u00fc\u00e7 d\u00f6rt s\u0131f\u0131r bir"
   );
 });
 
 test("formatPhoneNumberForSpeech groups Turkish callback numbers into short blocks", () => {
   assert.equal(
     formatPhoneNumberForSpeech("0505 692 40 71"),
-    "0 5 0 5 - 6 9 2 - 4 0 - 7 1"
+    "s\u0131f\u0131r be\u015f s\u0131f\u0131r be\u015f - alt\u0131 dokuz iki - d\u00f6rt s\u0131f\u0131r - yedi bir"
+  );
+  assert.equal(
+    formatPhoneNumberForSpeech("+90 505 692 40 71"),
+    "s\u0131f\u0131r be\u015f s\u0131f\u0131r be\u015f - alt\u0131 dokuz iki - d\u00f6rt s\u0131f\u0131r - yedi bir"
   );
 });
 
 test("buildListingSpeechPresentation emits natural spoken phrases for listing search output", () => {
   const speech = buildListingSpeechPresentation(LISTING_FIXTURE);
 
-  assert.equal(speech.spokenReferenceCode, "DEMO - IST - 3 4 0 1");
+  assert.equal(
+    speech.spokenReferenceCode,
+    "DEMO - IST - \u00fc\u00e7 d\u00f6rt s\u0131f\u0131r bir"
+  );
   assert.equal(speech.spokenRoomPlan, "\u0130ki oda bir salon.");
   assert.equal(speech.spokenPrice, "Fiyat\u0131 altm\u0131\u015f be\u015f bin lira.");
   assert.equal(speech.spokenDues, "Aidat\u0131 iki bin be\u015f y\u00fcz lira.");
@@ -85,4 +92,27 @@ test("buildListingSpeechPresentation emits natural spoken phrases for listing se
   assert.match(speech.spokenSummary, /Bina ya\u015f\u0131 on iki\./);
   assert.match(speech.spokenSummary, /Balkon var\./);
   assert.match(speech.spokenSummary, /Asans\u00f6r var\./);
+  assert.doesNotMatch(speech.spokenSummary, /Renovated|Apartment|Coast/i);
+});
+
+test("buildListingSpeechPresentation does not leak unknown propertyType enums", () => {
+  const speech = buildListingSpeechPresentation({
+    ...LISTING_FIXTURE,
+    title: "Kadikoy Moda Loft Near the Coast",
+    propertyType: "loft"
+  });
+
+  assert.match(speech.spokenSummary, /kiral\u0131k bir ilan var\./);
+  assert.doesNotMatch(speech.spokenSummary, /loft/i);
+});
+
+test("buildListingSpeechPresentation skips awkward bedroom-only fallback when no room plan is present", () => {
+  const speech = buildListingSpeechPresentation({
+    ...LISTING_FIXTURE,
+    title: "Kadikoy Moda Family Flat",
+    bedrooms: 3
+  });
+
+  assert.equal(speech.spokenRoomPlan, null);
+  assert.doesNotMatch(speech.spokenSummary, /yatak odas\u0131 g\u00f6r\u00fcn\u00fcyor/i);
 });

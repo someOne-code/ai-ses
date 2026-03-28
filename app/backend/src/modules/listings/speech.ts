@@ -148,7 +148,16 @@ export function formatTurkishNumberForSpeech(value: number): string {
 }
 
 export function formatPhoneNumberForSpeech(phoneNumber: string): string {
-  const digits = phoneNumber.replace(/\D/g, "");
+  const rawDigits = phoneNumber.replace(/\D/g, "");
+  const digits =
+    rawDigits.length === 12 && rawDigits.startsWith("90")
+      ? `0${rawDigits.slice(2)}`
+      : rawDigits;
+  const speakDigits = (value: string) =>
+    value
+      .split("")
+      .map((digit) => DIGIT_WORDS[Number(digit)] ?? digit)
+      .join(" ");
 
   if (digits.length === 11) {
     return [
@@ -157,7 +166,7 @@ export function formatPhoneNumberForSpeech(phoneNumber: string): string {
       digits.slice(7, 9),
       digits.slice(9, 11)
     ]
-      .map((group) => group.split("").join(" "))
+      .map((group) => speakDigits(group))
       .join(" - ");
   }
 
@@ -168,20 +177,26 @@ export function formatPhoneNumberForSpeech(phoneNumber: string): string {
       digits.slice(6, 8),
       digits.slice(8, 10)
     ]
-      .map((group) => group.split("").join(" "))
+      .map((group) => speakDigits(group))
       .join(" - ");
   }
 
-  return digits.split("").join(" ");
+  return speakDigits(digits);
 }
 
 export function formatReferenceCodeForSpeech(referenceCode: string): string {
+  const speakDigits = (value: string) =>
+    value
+      .split("")
+      .map((digit) => DIGIT_WORDS[Number(digit)] ?? digit)
+      .join(" ");
+
   return referenceCode
     .split(/[^A-Za-z0-9]+/)
     .filter((part) => part.length > 0)
     .map((part) => {
       if (/^\d+$/.test(part)) {
-        return part.split("").join(" ");
+        return speakDigits(part);
       }
 
       return part.toUpperCase();
@@ -217,14 +232,6 @@ function buildRoomPlanSentence(
     return appendPeriod(
       capitalizeSentence(
       `${formatTurkishNumberForSpeech(parsed.bedrooms)} oda ${formatTurkishNumberForSpeech(parsed.salons)} salon`
-      )
-    );
-  }
-
-  if (listing.bedrooms !== null) {
-    return appendPeriod(
-      capitalizeSentence(
-        `${formatTurkishNumberForSpeech(listing.bedrooms)} yatak odas\u0131 g\u00f6r\u00fcn\u00fcyor`
       )
     );
   }
@@ -325,14 +332,23 @@ function buildPropertyKindPhrase(
         ? "sat\u0131l\u0131k"
         : null;
 
-  const propertyType =
+  const propertyTypeLabel =
     listing.propertyType === "apartment"
-      ? "bir daire"
+      ? "daire"
       : listing.propertyType === "villa"
-        ? "bir villa"
-        : listing.propertyType
-          ? `bir ${listing.propertyType}`
-          : "bir ilan";
+        ? "villa"
+        : listing.propertyType === "duplex"
+          ? "dubleks"
+          : listing.propertyType === "residence"
+            ? "rezidans"
+            : listing.propertyType === "office"
+              ? "ofis"
+              : listing.propertyType === "land"
+                ? "arsa"
+                : null;
+
+  const propertyType =
+    propertyTypeLabel !== null ? `bir ${propertyTypeLabel}` : "bir ilan";
 
   if (listingType) {
     return `${listingType} ${propertyType}`;

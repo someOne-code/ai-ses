@@ -120,6 +120,30 @@ function sanitizeToolArgs(name: string, args: Record<string, unknown>) {
   return args;
 }
 
+function getCallerSafeFailureMessage(
+  toolName: string,
+  error: AppError
+): string {
+  switch (error.code) {
+    case "OFFICE_CONTEXT_NOT_FOUND":
+      return "Bu çağrıyı doğru ofis kaydıyla eşleştiremedim.";
+    case "LISTING_REFERENCE_AMBIGUOUS":
+      return "Referans kodunu netleştiremedim. Tam kodu bir kez daha söyleyelim.";
+    case "LISTING_NOT_FOUND":
+      return toolName === "search_listings"
+        ? "Uygun ilan bulamadım."
+        : "İlgili ilanı bulamadım.";
+    case "VALIDATION_ERROR":
+      return toolName === "create_showing_request"
+        ? "Talebi oluşturmak için bazı bilgileri yeniden teyit etmem gerekiyor."
+        : "İsteği işlerken bir bilgiyi yeniden teyit etmem gerekiyor.";
+    case "RETELL_TOOL_NOT_SUPPORTED":
+      return "Bu adımı şu anda tamamlayamıyorum.";
+    default:
+      return "Şu anda isteği tamamlayamadım. Bir kez daha deneyelim.";
+  }
+}
+
 export function createRetellService(options: RetellServiceOptions) {
   async function ensureWebhookSecret(): Promise<string> {
     const webhookSecret = options.webhookSecret ?? env.RETELL_WEBHOOK_SECRET;
@@ -222,7 +246,7 @@ export function createRetellService(options: RetellServiceOptions) {
       tool: toolName,
       error: {
         code: error.code,
-        message: error.message
+        message: getCallerSafeFailureMessage(toolName, error)
       }
     };
   }
