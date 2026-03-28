@@ -7,7 +7,9 @@ import { AppError } from "../src/lib/errors.js";
 import type { ListingsService } from "../src/modules/listings/service.js";
 import type {
   ListingDetail,
-  ListingSearchItem
+  ListingSearchResult,
+  ListingSearchItem,
+  SearchListingsFilters
 } from "../src/modules/listings/types.js";
 import type {
   CreateAuditEventInput,
@@ -112,15 +114,32 @@ const LISTING_FIXTURES: ListingFixture[] = [
 ];
 
 function createFakeListingsService(): ListingsService {
+  async function searchListingsDetailed(
+    filters: SearchListingsFilters
+  ): Promise<ListingSearchResult> {
+    const listings = LISTING_FIXTURES
+      .filter((listing) => listing.officeId === filters.officeId)
+      .filter((listing) =>
+        filters.district ? listing.district === filters.district : true
+      )
+      .slice(0, filters.limit)
+      .map(({ officeId: _officeId, ...listing }) => listing);
+
+    return {
+      listings,
+      matchInterpretation:
+        filters.searchMode === "hybrid" && filters.queryText
+          ? "hybrid_candidate"
+          : "verified_structured_match"
+    };
+  }
+
   return {
+    searchListingsDetailed,
     async searchListings(filters) {
-      return LISTING_FIXTURES
-        .filter((listing) => listing.officeId === filters.officeId)
-        .filter((listing) =>
-          filters.district ? listing.district === filters.district : true
-        )
-        .slice(0, filters.limit)
-        .map(({ officeId: _officeId, ...listing }) => listing);
+      const result = await searchListingsDetailed(filters);
+
+      return result.listings;
     },
     async getListingByReference(params) {
       const listing = LISTING_FIXTURES.find(
@@ -161,6 +180,7 @@ function createFakeShowingRequestsService() {
         customerName: input.customerName,
         customerPhone: input.customerPhone,
         customerEmail: input.customerEmail ?? null,
+        preferredTimeWindow: input.preferredTimeWindow ?? null,
         preferredDatetime: input.preferredDatetime.toISOString(),
         status: "pending",
         createdAt: "2026-03-24T09:30:00.000Z"
@@ -238,6 +258,76 @@ test("retell tool contracts expose the phase-1 backed tools", () => {
   );
 });
 
+test("search_listings contract tells the agent to drop stale subjective intent after criteria change", () => {
+  const searchTool = retellToolContracts.find(
+    (tool) => tool.name === "search_listings"
+  );
+
+  assert.ok(searchTool);
+  assert.match(
+    searchTool.description,
+    /latest active criteria|latest request/i
+  );
+  assert.match(searchTool.description, /do not carry over an old free-text intent/i);
+
+  const queryTextProperty = searchTool.parameters.properties.queryText as {
+    description?: string;
+  };
+
+  assert.match(
+    queryTextProperty.description ?? "",
+    /still active in the caller's latest request/i
+  );
+});
+
+test("tool contracts forbid reading internal structure or raw formatting aloud", () => {
+  const searchTool = retellToolContracts.find(
+    (tool) => tool.name === "search_listings"
+  );
+  const referenceTool = retellToolContracts.find(
+    (tool) => tool.name === "get_listing_by_reference"
+  );
+  const showingTool = retellToolContracts.find(
+    (tool) => tool.name === "create_showing_request"
+  );
+
+  assert.ok(searchTool);
+  assert.ok(referenceTool);
+  assert.ok(showingTool);
+
+  assert.match(
+    searchTool.description,
+    /never read raw keys, JSON fragments, tool formatting, field labels, or raw English title text aloud/i
+  );
+  assert.match(searchTool.description, /raw English title text/i);
+  assert.match(
+    searchTool.description,
+    /short natural Turkish sentences/i
+  );
+  assert.match(searchTool.description, /spokenSummary/i);
+  assert.match(searchTool.description, /spokenDues/i);
+  assert.match(searchTool.description, /spokenReferenceCode/i);
+
+  assert.match(
+    referenceTool.description,
+    /never read transcript structure, field labels, JSON-like formatting, or raw English title text aloud/i
+  );
+  assert.match(referenceTool.description, /raw English title text/i);
+  assert.match(
+    referenceTool.description,
+    /short natural Turkish sentences/i
+  );
+  assert.match(referenceTool.description, /spokenSummary/i);
+  assert.match(referenceTool.description, /spokenDues/i);
+
+  assert.match(
+    showingTool.description,
+    /do not expose tool names, argument keys, or schema words to the caller/i
+  );
+  assert.match(showingTool.description, /short blocks/i);
+  assert.match(showingTool.description, /fully Turkish/i);
+});
+
 test("POST /v1/retell/tools executes search_listings with resolved office scope", async () => {
   const listingsService = createFakeListingsService();
   const showingRequestsService = createFakeShowingRequestsService().service;
@@ -281,6 +371,16 @@ test("POST /v1/retell/tools executes search_listings with resolved office scope"
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ok, true);
   assert.equal(response.json().tool, "search_listings");
+  assert.equal(
+    response.json().data.matchInterpretation,
+    "verified_structured_match"
+  );
+  assert.match(
+    response.json().data.listings[0].spokenSummary,
+    /Kadikoy|kiralık|satılık|daire/i
+  );
+  assert.ok(response.json().data.listings[0].spokenDues);
+  assert.ok(response.json().data.listings[0].spokenReferenceCode);
   assert.deepEqual(
     response
       .json()
@@ -289,6 +389,256 @@ test("POST /v1/retell/tools executes search_listings with resolved office scope"
   );
   assert.equal(retellRepository.auditEvents.length, 1);
   assert.equal(retellRepository.auditEvents[0]?.action, "retell.tool.executed");
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools normalizes noisy optional search args from Retell providers", async () => {
+  let receivedFilters: SearchListingsFilters | null = null;
+
+  const listingsService: ListingsService = {
+    async searchListingsDetailed(filters) {
+      receivedFilters = filters;
+
+      return {
+        listings: [
+          {
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+            referenceCode: "REF-002",
+            title: "Kadikoy Budget Rental",
+            listingType: "rent",
+            propertyType: "apartment",
+            price: 45000,
+            currency: "TRY",
+            bedrooms: 2,
+            bathrooms: 1,
+            netM2: 95,
+            district: "Kadikoy",
+            neighborhood: "Moda",
+            status: "active"
+          }
+        ],
+        matchInterpretation: "verified_structured_match"
+      };
+    },
+    async searchListings(filters) {
+      receivedFilters = filters;
+
+      return [
+        {
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+          referenceCode: "REF-002",
+          title: "Kadikoy Budget Rental",
+          listingType: "rent",
+          propertyType: "apartment",
+          price: 45000,
+          currency: "TRY",
+          bedrooms: 2,
+          bathrooms: 1,
+          netM2: 95,
+          district: "Kadikoy",
+          neighborhood: "Moda",
+          status: "active"
+        }
+      ];
+    },
+    async getListingByReference() {
+      throw new Error("getListingByReference should not be called in this test");
+    },
+    async refreshMainSearchDocument() {
+      throw new Error(
+        "refreshMainSearchDocument should not be called in this test"
+      );
+    }
+  };
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "search_listings",
+    args: {
+      district: "Kadıköy",
+      neighborhood: "",
+      listingType: "rent",
+      propertyType: null,
+      queryText: null,
+      minPrice: 0,
+      maxPrice: 65000,
+      minBedrooms: 2,
+      minBathrooms: 0,
+      minNetM2: "",
+      maxNetM2: null,
+      limit: 3
+    },
+    call: {
+      call_id: "call_search_1_noisy",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(
+    response.json().data.matchInterpretation,
+    "verified_structured_match"
+  );
+  assert.equal(receivedFilters?.officeId, OFFICE_1_ID);
+  assert.equal(receivedFilters?.district, "Kadıköy");
+  assert.equal(receivedFilters?.listingType, "rent");
+  assert.equal(receivedFilters?.maxPrice, 65000);
+  assert.equal(receivedFilters?.minBedrooms, 2);
+  assert.equal(receivedFilters?.searchMode, "structured");
+  assert.equal(receivedFilters?.limit, 3);
+  assert.equal(receivedFilters?.neighborhood, undefined);
+  assert.equal(receivedFilters?.propertyType, undefined);
+  assert.equal(receivedFilters?.queryText, undefined);
+  assert.equal(receivedFilters?.minPrice, undefined);
+  assert.equal(receivedFilters?.minBathrooms, undefined);
+  assert.equal(receivedFilters?.minNetM2, undefined);
+  assert.equal(receivedFilters?.maxNetM2, undefined);
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools returns no_match when subjective queryText has no verified candidates", async () => {
+  const listingsService: ListingsService = {
+    async searchListingsDetailed(filters) {
+      assert.equal(filters.searchMode, "hybrid");
+      assert.equal(filters.queryText, "metroya yakin");
+
+      return {
+        listings: [],
+        matchInterpretation: "no_match"
+      };
+    },
+    async searchListings() {
+      return [];
+    },
+    async getListingByReference() {
+      throw new Error("getListingByReference should not be called in this test");
+    },
+    async refreshMainSearchDocument() {
+      throw new Error(
+        "refreshMainSearchDocument should not be called in this test"
+      );
+    }
+  };
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "search_listings",
+    args: {
+      district: "Kadikoy",
+      queryText: "metroya yakin",
+      limit: 3
+    },
+    call: {
+      call_id: "call_search_no_match",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(response.json().data.count, 0);
+  assert.equal(response.json().data.matchInterpretation, "no_match");
+  assert.deepEqual(response.json().data.listings, []);
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools includes spoken fields on verified reference lookup results", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "get_listing_by_reference",
+    args: {
+      referenceCode: "REF-001"
+    },
+    call: {
+      call_id: "call_reference_spoken_fields",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.ok(response.json().data.listing.spokenSummary);
+  assert.ok(response.json().data.listing.spokenDues);
+  assert.ok(response.json().data.listing.spokenReferenceCode);
+  assert.ok(Array.isArray(response.json().data.listing.spokenHighlights));
 
   await app.close();
 });
@@ -332,6 +682,261 @@ test("POST /v1/retell/tools rejects invalid signatures", async () => {
   assert.equal(response.json().error.code, "RETELL_SIGNATURE_INVALID");
 
   await app.close();
+});
+
+test("POST /v1/retell/tools accepts blank optional customerEmail for create_showing_request", async () => {
+  const listingsService = createFakeListingsService();
+  const { service: showingRequestsService, createdRequests } =
+    createFakeShowingRequestsService();
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "create_showing_request",
+    args: {
+      listingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      customerName: "Ada Yilmaz",
+      customerPhone: "+905551112233",
+      customerEmail: "",
+      preferredTimeWindow: "afternoon",
+      preferredDatetime: "2026-03-28T18:30:00.000Z"
+    },
+    call: {
+      call_id: "call_showing_blank_email",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(createdRequests.length, 1);
+  assert.equal(createdRequests[0]?.customerEmail, null);
+  assert.equal(createdRequests[0]?.preferredTimeWindow, "afternoon");
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools rejects raw reference codes for create_showing_request listingId", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "create_showing_request",
+    args: {
+      listingId: "IST3401",
+      customerName: "Umut",
+      customerPhone: "+905551112233",
+      preferredDatetime: "2026-03-29T12:00:00.000Z"
+    },
+    call: {
+      call_id: "call_showing_raw_reference",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, false);
+  assert.equal(response.json().tool, "create_showing_request");
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools rejects literal {{user_number}} callback placeholders", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "create_showing_request",
+    args: {
+      listingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      customerName: "Umut",
+      customerPhone: "{{user_number}}",
+      preferredDatetime: "2026-03-29T12:00:00.000Z"
+    },
+    call: {
+      call_id: "call_showing_placeholder_phone",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, false);
+  assert.equal(response.json().tool, "create_showing_request");
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+
+  await app.close();
+});
+
+test("create_showing_request accepts a single caller name without requiring surname", async () => {
+  const listingsService = createFakeListingsService();
+  const { service: showingRequestsService, createdRequests } =
+    createFakeShowingRequestsService();
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "create_showing_request",
+    args: {
+      listingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      customerName: "Umut",
+      customerPhone: "+905551112233",
+      preferredDatetime: "2026-03-29T12:00:00.000Z"
+    },
+    call: {
+      call_id: "call_showing_single_name",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(createdRequests.length, 1);
+  assert.equal(createdRequests[0]?.customerName, "Umut");
+
+  await app.close();
+});
+
+test("create_showing_request contract does not imply surname is required", () => {
+  const tool = retellToolContracts.find(
+    (entry) => entry.name === "create_showing_request"
+  );
+  const listingIdProperty = tool?.parameters.properties.listingId as
+    | { description?: string }
+    | undefined;
+  const customerNameProperty = tool?.parameters.properties.customerName as
+    | { description?: string }
+    | undefined;
+  const customerPhoneProperty = tool?.parameters.properties.customerPhone as
+    | { description?: string }
+    | undefined;
+
+  assert.ok(listingIdProperty?.description);
+  assert.ok(customerNameProperty?.description);
+  assert.ok(customerPhoneProperty?.description);
+  assert.match(
+    tool?.description ?? "",
+    /minimum required customer details/i
+  );
+  assert.match(tool?.description ?? "", /verified backend UUID/i);
+  assert.match(tool?.description ?? "", /never a raw spoken reference code/i);
+  assert.match(tool?.description ?? "", /never a literal placeholder/i);
+  assert.match(listingIdProperty.description ?? "", /verified backend listing UUID/i);
+  assert.match(listingIdProperty.description ?? "", /never pass a raw reference code/i);
+  assert.match(customerNameProperty.description ?? "", /single given name/i);
+  assert.doesNotMatch(customerNameProperty.description ?? "", /full name/i);
+  assert.match(customerPhoneProperty.description ?? "", /confirmed callback/i);
+  assert.match(customerPhoneProperty.description ?? "", /phone_call/i);
+  assert.match(customerPhoneProperty.description ?? "", /web_call/i);
+  assert.match(customerPhoneProperty.description ?? "", /never pass a literal placeholder/i);
+});
+
+test("get_listing_by_reference contract preserves full spoken prefixes", () => {
+  const tool = retellToolContracts.find(
+    (entry) => entry.name === "get_listing_by_reference"
+  );
+  const referenceCodeProperty = tool?.parameters.properties.referenceCode as
+    | { description?: string }
+    | undefined;
+
+  assert.ok(tool);
+  assert.ok(referenceCodeProperty?.description);
+  assert.match(tool?.description ?? "", /including any leading prefix such as DEMO/i);
+  assert.match(tool?.description ?? "", /partial codes are not/i);
+  assert.match(referenceCodeProperty.description ?? "", /full listing reference code/i);
+  assert.match(referenceCodeProperty.description ?? "", /including prefixes like DEMO/i);
 });
 
 test("POST /v1/webhooks/retell persists call state with phone-based office resolution", async () => {

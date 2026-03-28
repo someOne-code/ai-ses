@@ -2,6 +2,7 @@ import { verify } from "retell-sdk";
 
 import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
+import { buildListingSpeechPresentation } from "../listings/speech.js";
 import type { ListingsService } from "../listings/service.js";
 import type { ShowingRequestsService } from "../showing-requests/service.js";
 import { normalizeRetellLeadQualification } from "./post-call-analysis.js";
@@ -104,6 +105,10 @@ function sanitizeToolArgs(name: string, args: Record<string, unknown>) {
   if (name === "create_showing_request") {
     return {
       listingId: typeof args.listingId === "string" ? args.listingId : null,
+      preferredTimeWindow:
+        typeof args.preferredTimeWindow === "string"
+          ? args.preferredTimeWindow
+          : null,
       preferredDatetime:
         typeof args.preferredDatetime === "string"
           ? args.preferredDatetime
@@ -300,7 +305,8 @@ export function createRetellService(options: RetellServiceOptions) {
         switch (request.name) {
           case "search_listings": {
             const args = parseSearchListingsToolArgs(request.args);
-            const listings = await options.listingsService.searchListings({
+            const searchResult =
+              await options.listingsService.searchListingsDetailed({
               officeId: officeContext.officeId,
               ...args
             });
@@ -309,8 +315,12 @@ export function createRetellService(options: RetellServiceOptions) {
               ok: true,
               tool: request.name,
               data: {
-                count: listings.length,
-                listings
+                count: searchResult.listings.length,
+                matchInterpretation: searchResult.matchInterpretation,
+                listings: searchResult.listings.map((listing) => ({
+                  ...listing,
+                  ...buildListingSpeechPresentation(listing)
+                }))
               }
             };
             break;
@@ -327,7 +337,10 @@ export function createRetellService(options: RetellServiceOptions) {
               ok: true,
               tool: request.name,
               data: {
-                listing
+                listing: {
+                  ...listing,
+                  ...buildListingSpeechPresentation(listing)
+                }
               }
             };
             break;

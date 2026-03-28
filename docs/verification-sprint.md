@@ -126,6 +126,76 @@ Preferred approaches:
 - Retell API-driven web call with metadata or dynamic variables
 - or officially signed local webhook smoke verification
 
+Observed live provider evidence should be kept with this proof when a bug is caused by provider payload shape, not only by our internal logic.
+
+Example captured from a real Retell web call on `2026-03-28`:
+
+- call id: `call_ce7c6a3a610bfd47654a664e606`
+- capture source: live Retell custom function request inspected through the local tunnel during the failing `search_listings` run
+
+Raw request excerpt 1:
+
+```json
+{
+  "name": "search_listings",
+  "args": {
+    "district": "Kadıköy",
+    "neighborhood": null,
+    "listingType": "rent",
+    "propertyType": null,
+    "queryText": null,
+    "minPrice": null,
+    "maxPrice": 65000,
+    "minBedrooms": 2,
+    "minBathrooms": null,
+    "minNetM2": null,
+    "maxNetM2": null,
+    "limit": 3
+  },
+  "call": {
+    "call_id": "call_ce7c6a3a610bfd47654a664e606",
+    "metadata": {
+      "office_id": "22222222-2222-4222-8222-222222222222"
+    }
+  }
+}
+```
+
+Raw request excerpt 2 from the same failing call after follow-up clarification:
+
+```json
+{
+  "name": "search_listings",
+  "args": {
+    "district": "Kadıköy",
+    "neighborhood": "",
+    "listingType": "rent",
+    "propertyType": "",
+    "queryText": "",
+    "minPrice": 0,
+    "maxPrice": 65000,
+    "minBedrooms": 2,
+    "minBathrooms": 0,
+    "minNetM2": 0,
+    "maxNetM2": 0,
+    "limit": 3
+  },
+  "call": {
+    "call_id": "call_ce7c6a3a610bfd47654a664e606",
+    "metadata": {
+      "office_id": "22222222-2222-4222-8222-222222222222"
+    }
+  }
+}
+```
+
+What this proves:
+
+- the failure was not hypothetical
+- Retell can emit missing optional fields as `null`
+- later retries in the same call can emit the same missing fields as `""` or `0`
+- provider-boundary normalization tests should mirror these exact shapes
+
 ### 5. Chained Local E2E Path
 
 Add one repeatable local chained verification path that covers:
@@ -236,3 +306,47 @@ Current status:
   - official n8n Google Calendar node
   - existing local OAuth credential
   - backend writeback still visible after provider-side event creation
+
+### 3. Lead Qualification V2
+
+After the current conversation-quality and search-correctness issues are closed, run a dedicated lead-qualification upgrade pass.
+
+Goal:
+
+- move beyond a thin `cold / warm / hot` model
+- align more closely with common real-estate CRM patterns
+- keep `handoffRecommended` separate from lead temperature
+
+Target model direction:
+
+1. `intent / stage`
+   - `listing_question`
+   - `showing_request`
+   - `general_inquiry`
+   - `handoff_request`
+   - optional later `nurture` or `long_term`
+2. `temperature / urgency`
+   - `cold`
+   - `warm`
+   - `hot`
+   - optional later `long_term`
+3. `qualification signals`
+   - `budgetKnown`
+   - `locationKnown`
+   - `timelineKnown`
+   - specific listing known
+   - callback reliability
+   - optional later financing or preapproval known
+
+Implementation rule:
+
+- inspect local reference repos first
+- then inspect primary external sources for real-estate CRM or lead-routing patterns
+- apply the change in narrow slices, not as one broad redesign
+- do not mix this work into current prompt-copy, TTS, or reference-resolution fixes
+
+Acceptance direction:
+
+- the model should be more useful for routing, follow-up priority, and owner alerts
+- temperature should reflect urgency or readiness, not simply whether the caller talked a lot
+- handoff should remain an independent escalation signal, not a synonym for `hot`

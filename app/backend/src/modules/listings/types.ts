@@ -106,6 +106,16 @@ export interface ListingSearchItem {
   status: string;
 }
 
+export type ListingSearchMatchInterpretation =
+  | "verified_structured_match"
+  | "hybrid_candidate"
+  | "no_match";
+
+export interface ListingSearchResult {
+  listings: ListingSearchItem[];
+  matchInterpretation: ListingSearchMatchInterpretation;
+}
+
 export interface ListingDetail extends ListingSearchItem {
   description: string | null;
   grossM2: number | null;

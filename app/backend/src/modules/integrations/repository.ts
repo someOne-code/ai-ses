@@ -120,6 +120,7 @@ export function createIntegrationsRepository(db: Database) {
           customerName: showingRequests.customerName,
           customerPhone: showingRequests.customerPhone,
           customerEmail: showingRequests.customerEmail,
+          preferredTimeWindow: showingRequests.preferredTimeWindow,
           preferredDatetime: showingRequests.preferredDatetime,
           status: showingRequests.status,
           createdAt: showingRequests.createdAt

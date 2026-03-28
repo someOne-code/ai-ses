@@ -3,6 +3,7 @@ import {
   asLeadIntent,
   asLeadTemperature
 } from "../retell/post-call-analysis.js";
+import { asPreferredTimeWindow } from "../showing-requests/types.js";
 
 import type { CrmWorkflowDispatcher } from "./dispatcher.js";
 import type { IntegrationsRepository } from "./repository.js";
@@ -206,6 +207,9 @@ export function createIntegrationsService(options: IntegrationsServiceOptions) {
           customerName: showingRequest.customerName,
           customerPhone: showingRequest.customerPhone,
           customerEmail: showingRequest.customerEmail,
+          preferredTimeWindow: asPreferredTimeWindow(
+            showingRequest.preferredTimeWindow
+          ),
           preferredDatetime: showingRequest.preferredDatetime.toISOString(),
           status: showingRequest.status,
           createdAt: showingRequest.createdAt.toISOString()
@@ -253,6 +257,9 @@ export function createIntegrationsService(options: IntegrationsServiceOptions) {
           customerName: showingRequest.customerName,
           customerPhone: showingRequest.customerPhone,
           customerEmail: showingRequest.customerEmail,
+          preferredTimeWindow: asPreferredTimeWindow(
+            showingRequest.preferredTimeWindow
+          ),
           preferredDatetime: showingRequest.preferredDatetime.toISOString(),
           status: showingRequest.status
         };

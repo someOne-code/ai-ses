@@ -19,12 +19,18 @@ import {
 import type {
   ListingByReferenceParams,
   ListingSearchDocumentRefreshParams,
-  SearchListingsFilters
+  SearchListingsFilters,
+  ListingSearchMatchInterpretation
 } from "./types.js";
 
 const MAIN_LISTING_SEARCH_DOCUMENT_TYPE = "main" as const;
 const MAX_VECTOR_COSINE_DISTANCE = 0.3;
 const HYBRID_RRF_K = 50;
+const REFERENCE_CODE_NORMALIZATION_SOURCE =
+  "\u00c7\u011e\u0130\u00d6\u015e\u00dc\u00c2\u00ce\u00db -_./!";
+const REFERENCE_CODE_NORMALIZATION_TARGET = "CGIOSUAIU";
+const SEARCH_NORMALIZATION_SOURCE = "çğıöşüâîû";
+const SEARCH_NORMALIZATION_TARGET = "cgiosuaiu";
 
 const listingSearchSelection = {
   id: listings.id,
@@ -43,19 +49,58 @@ const listingSearchSelection = {
   createdAt: listings.createdAt
 };
 
-function hasStructuredSearchConstraints(filters: SearchListingsFilters): boolean {
-  return (
-    filters.district !== undefined ||
-    filters.neighborhood !== undefined ||
-    filters.listingType !== undefined ||
-    filters.propertyType !== undefined ||
-    filters.minPrice !== undefined ||
-    filters.maxPrice !== undefined ||
-    filters.minBedrooms !== undefined ||
-    filters.minBathrooms !== undefined ||
-    filters.minNetM2 !== undefined ||
-    filters.maxNetM2 !== undefined
-  );
+const listingDetailSelection = {
+  id: listings.id,
+  referenceCode: listings.referenceCode,
+  title: listings.title,
+  description: listings.description,
+  propertyType: listings.propertyType,
+  listingType: listings.listingType,
+  status: listings.status,
+  price: listings.price,
+  currency: listings.currency,
+  bedrooms: listings.bedrooms,
+  bathrooms: listings.bathrooms,
+  netM2: listings.netM2,
+  grossM2: listings.grossM2,
+  floorNumber: listings.floorNumber,
+  buildingAge: listings.buildingAge,
+  dues: listings.dues,
+  district: listings.district,
+  neighborhood: listings.neighborhood,
+  addressText: listings.addressText,
+  hasBalcony: listings.hasBalcony,
+  hasParking: listings.hasParking,
+  hasElevator: listings.hasElevator
+};
+
+export function canonicalizeListingReferenceCode(value: string): string {
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/\u00c7/g, "C")
+    .replace(/\u011e/g, "G")
+    .replace(/\u0130/g, "I")
+    .replace(/\u00d6/g, "O")
+    .replace(/\u015e/g, "S")
+    .replace(/\u00dc/g, "U")
+    .replace(/\u00c2/g, "A")
+    .replace(/\u00ce/g, "I")
+    .replace(/\u00db/g, "U")
+    .replace(/[^A-Z0-9]+/g, "");
+}
+
+function normalizedReferenceCodeValue(
+  column: SQL | typeof listings.referenceCode
+) {
+  return sql<string>`regexp_replace(translate(upper(${column}), ${REFERENCE_CODE_NORMALIZATION_SOURCE}, ${REFERENCE_CODE_NORMALIZATION_TARGET}), '[^A-Z0-9]+', '', 'g')`;
+}
+
+function normalizedTextEquals(
+  column: SQL | typeof listings.district | typeof listings.neighborhood,
+  value: string
+) {
+  return sql`translate(lower(${column}), ${SEARCH_NORMALIZATION_SOURCE}, ${SEARCH_NORMALIZATION_TARGET}) = translate(lower(${value}), ${SEARCH_NORMALIZATION_SOURCE}, ${SEARCH_NORMALIZATION_TARGET})`;
 }
 
 function buildStructuredConditions(filters: SearchListingsFilters): SQL[] {
@@ -65,11 +110,13 @@ function buildStructuredConditions(filters: SearchListingsFilters): SQL[] {
   ];
 
   if (filters.district) {
-    conditions.push(eq(listings.district, filters.district));
+    conditions.push(normalizedTextEquals(listings.district, filters.district));
   }
 
   if (filters.neighborhood) {
-    conditions.push(eq(listings.neighborhood, filters.neighborhood));
+    conditions.push(
+      normalizedTextEquals(listings.neighborhood, filters.neighborhood)
+    );
   }
 
   if (filters.listingType) {
@@ -247,6 +294,13 @@ export function createListingsRepository(db: Database) {
       .slice(0, limit);
   }
 
+  function buildSearchResult<TResult>(input: {
+    listings: TResult[];
+    matchInterpretation: ListingSearchMatchInterpretation;
+  }) {
+    return input;
+  }
+
   return {
     async search(
       filters: SearchListingsFilters,
@@ -269,44 +323,28 @@ export function createListingsRepository(db: Database) {
         );
 
         if (hybridResults.length > 0) {
-          return hybridResults;
+          return buildSearchResult({
+            listings: hybridResults,
+            matchInterpretation: "hybrid_candidate"
+          });
         }
 
-        if (hasStructuredSearchConstraints(filters)) {
-          return searchStructured(conditions, filters.limit);
-        }
-
-        return [];
+        return buildSearchResult({
+          listings: [],
+          matchInterpretation: "no_match"
+        });
       }
 
-      return searchStructured(conditions, filters.limit);
+      return buildSearchResult({
+        listings: await searchStructured(conditions, filters.limit),
+        matchInterpretation: "verified_structured_match"
+      });
     },
 
     async findByReference(params: ListingByReferenceParams) {
-      const [listing] = await db
+      const [exactMatch] = await db
         .select({
-          id: listings.id,
-          referenceCode: listings.referenceCode,
-          title: listings.title,
-          description: listings.description,
-          propertyType: listings.propertyType,
-          listingType: listings.listingType,
-          status: listings.status,
-          price: listings.price,
-          currency: listings.currency,
-          bedrooms: listings.bedrooms,
-          bathrooms: listings.bathrooms,
-          netM2: listings.netM2,
-          grossM2: listings.grossM2,
-          floorNumber: listings.floorNumber,
-          buildingAge: listings.buildingAge,
-          dues: listings.dues,
-          district: listings.district,
-          neighborhood: listings.neighborhood,
-          addressText: listings.addressText,
-          hasBalcony: listings.hasBalcony,
-          hasParking: listings.hasParking,
-          hasElevator: listings.hasElevator
+          ...listingDetailSelection
         })
         .from(listings)
         .where(
@@ -318,7 +356,47 @@ export function createListingsRepository(db: Database) {
         )
         .limit(1);
 
-      return listing ?? null;
+      if (exactMatch) {
+        return {
+          kind: "found" as const,
+          listing: exactMatch
+        };
+      }
+
+      const normalizedReferenceCode = canonicalizeListingReferenceCode(
+        params.referenceCode
+      );
+
+      if (normalizedReferenceCode === "") {
+        return { kind: "not_found" as const };
+      }
+
+      const normalizedMatches = await db
+        .select({
+          ...listingDetailSelection
+        })
+        .from(listings)
+        .where(
+          and(
+            eq(listings.officeId, params.officeId),
+            eq(listings.status, "active"),
+            sql`${normalizedReferenceCodeValue(listings.referenceCode)} = ${normalizedReferenceCode}`
+          )
+        )
+        .limit(2);
+
+      if (normalizedMatches.length === 0) {
+        return { kind: "not_found" as const };
+      }
+
+      if (normalizedMatches.length > 1) {
+        return { kind: "ambiguous" as const };
+      }
+
+      return {
+        kind: "found" as const,
+        listing: normalizedMatches[0]!
+      };
     },
 
     async findActiveById(params: ListingSearchDocumentRefreshParams) {

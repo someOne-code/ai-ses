@@ -127,3 +127,26 @@ test("local demo seed materializes app-owned main search documents and cleanup s
     }
   });
 });
+
+test("local demo seed resolves spoken DEMO IST 3401 to the canonical reference code", async () => {
+  await withLocalDemoDataLock(async () => {
+    const hadSeedDataBefore = (await getDemoState()).officeExists;
+
+    try {
+      await seedLocalDemoDataWithoutLock();
+
+      const listing = await listingsService.getListingByReference({
+        officeId: LOCAL_DEMO_IDS.officeId,
+        referenceCode: "DEMO IST 3401"
+      });
+
+      assert.equal(listing.referenceCode, "DEMO-IST-3401");
+    } finally {
+      if (hadSeedDataBefore) {
+        await seedLocalDemoDataWithoutLock();
+      } else {
+        await cleanupLocalDemoDataWithoutLock();
+      }
+    }
+  });
+});

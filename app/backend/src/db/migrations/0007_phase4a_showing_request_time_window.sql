@@ -1,0 +1,1 @@
+ALTER TABLE "showing_requests" ADD COLUMN "preferred_time_window" text;

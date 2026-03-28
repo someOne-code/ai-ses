@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { sign } from "retell-sdk";
 
 process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5433/ai_ses";
@@ -67,11 +67,11 @@ async function cleanupRetellAnalysisFixture(input: {
   await db.delete(tenants).where(eq(tenants.id, input.tenantId));
 }
 
-test("normalizeRetellLeadQualification accepts nested custom analysis data and canonicalizes values", () => {
+test("normalizeRetellLeadQualification preserves explicit human escalation recommendations", () => {
   const normalized = normalizeRetellLeadQualification({
     leadTemperature: "Warm",
     custom_analysis_data: {
-      lead_intent: "showing request",
+      lead_intent: "handoff request",
       handoff_recommended: "yes",
       budget_known: true,
       location_known: "unknown",
@@ -80,7 +80,7 @@ test("normalizeRetellLeadQualification accepts nested custom analysis data and c
   });
 
   assert.deepEqual(normalized, {
-    leadIntent: "showing_request",
+    leadIntent: "handoff_request",
     leadTemperature: "warm",
     handoffRecommended: true,
     budgetKnown: true,
@@ -89,7 +89,51 @@ test("normalizeRetellLeadQualification accepts nested custom analysis data and c
   });
 });
 
-test("default retell webhook wiring persists normalized lead qualification fields from call_analyzed", async () => {
+test("normalizeRetellLeadQualification preserves successful self-service outcomes without handoff", () => {
+  const normalized = normalizeRetellLeadQualification({
+    custom_analysis_data: {
+      lead_intent: "showing_request",
+      lead_temperature: "hot",
+      handoff_recommended: "no",
+      budget_known: true,
+      location_known: true,
+      timeline_known: false
+    }
+  });
+
+  assert.deepEqual(normalized, {
+    leadIntent: "showing_request",
+    leadTemperature: "hot",
+    handoffRecommended: false,
+    budgetKnown: true,
+    locationKnown: true,
+    timelineKnown: false
+  });
+});
+
+test("normalizeRetellLeadQualification preserves ordinary listing search without handoff", () => {
+  const normalized = normalizeRetellLeadQualification({
+    custom_analysis_data: {
+      lead_intent: "listing_question",
+      lead_temperature: "warm",
+      handoff_recommended: false,
+      budget_known: true,
+      location_known: true,
+      timeline_known: false
+    }
+  });
+
+  assert.deepEqual(normalized, {
+    leadIntent: "listing_question",
+    leadTemperature: "warm",
+    handoffRecommended: false,
+    budgetKnown: true,
+    locationKnown: true,
+    timelineKnown: false
+  });
+});
+
+test("default retell webhook wiring persists self-service showing requests without handoff recommendation", async () => {
   const fixture = await insertRetellAnalysisFixture();
   const callId = `retell-analysis-${randomUUID()}`;
   const app = await createApp({
@@ -107,11 +151,12 @@ test("default retell webhook wiring persists normalized lead qualification field
           office_id: fixture.officeId
         },
         call_analysis: {
-          call_summary: "Caller wants to visit a property this weekend.",
+          call_summary:
+            "Caller completed a self-service showing request for this weekend.",
           custom_analysis_data: {
             lead_intent: "showing_request",
             lead_temperature: "hot",
-            handoff_recommended: true,
+            handoff_recommended: false,
             budget_known: true,
             location_known: true,
             timeline_known: false
@@ -148,10 +193,13 @@ test("default retell webhook wiring persists normalized lead qualification field
       .where(eq(callLogs.providerCallId, callId))
       .limit(1);
 
-    assert.equal(callLog?.summary, "Caller wants to visit a property this weekend.");
+    assert.equal(
+      callLog?.summary,
+      "Caller completed a self-service showing request for this weekend."
+    );
     assert.equal(callLog?.leadIntent, "showing_request");
     assert.equal(callLog?.leadTemperature, "hot");
-    assert.equal(callLog?.handoffRecommended, true);
+    assert.equal(callLog?.handoffRecommended, false);
     assert.equal(callLog?.budgetKnown, true);
     assert.equal(callLog?.locationKnown, true);
     assert.equal(callLog?.timelineKnown, false);
@@ -178,7 +226,7 @@ test("default retell webhook wiring persists normalized lead qualification field
       {
         leadIntent: "showing_request",
         leadTemperature: "hot",
-        handoffRecommended: true,
+        handoffRecommended: false,
         budgetKnown: true,
         locationKnown: true,
         timelineKnown: false
@@ -197,10 +245,82 @@ test("default retell webhook wiring persists normalized lead qualification field
     assert.equal(crmContract.entity.entityType, "call_log");
     assert.equal(crmContract.entity.leadIntent, "showing_request");
     assert.equal(crmContract.entity.leadTemperature, "hot");
-    assert.equal(crmContract.entity.handoffRecommended, true);
+    assert.equal(crmContract.entity.handoffRecommended, false);
     assert.equal(crmContract.entity.budgetKnown, true);
     assert.equal(crmContract.entity.locationKnown, true);
     assert.equal(crmContract.entity.timelineKnown, false);
+  } finally {
+    await cleanupRetellAnalysisFixture(fixture);
+  }
+});
+
+test("default retell webhook wiring preserves legitimate handoff recommendations for explicit escalation", async () => {
+  const fixture = await insertRetellAnalysisFixture();
+  const callId = `retell-analysis-handoff-${randomUUID()}`;
+  const app = await createApp({
+    readyCheck: async () => undefined
+  });
+
+  try {
+    const payload = {
+      event_type: "call_analyzed",
+      call: {
+        call_id: callId,
+        call_status: "ended",
+        direction: "inbound",
+        metadata: {
+          office_id: fixture.officeId
+        },
+        call_analysis: {
+          call_summary:
+            "Caller asked for a human agent to discuss price negotiation.",
+          custom_analysis_data: {
+            lead_intent: "handoff_request",
+            lead_temperature: "hot",
+            handoff_recommended: true,
+            budget_known: true,
+            location_known: true,
+            timeline_known: true
+          }
+        }
+      }
+    };
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/webhooks/retell",
+      headers: {
+        "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+      },
+      payload
+    });
+
+    assert.equal(response.statusCode, 200);
+
+    const [callLog] = await db
+      .select({
+        id: callLogs.id,
+        leadIntent: callLogs.leadIntent,
+        handoffRecommended: callLogs.handoffRecommended
+      })
+      .from(callLogs)
+      .where(eq(callLogs.providerCallId, callId))
+      .limit(1);
+
+    assert.equal(callLog?.leadIntent, "handoff_request");
+    assert.equal(callLog?.handoffRecommended, true);
+
+    const crmContract = await createIntegrationsService({
+      repository: createIntegrationsRepository(db)
+    }).getCrmWebhookContract({
+      officeId: fixture.officeId,
+      entityType: "call_log",
+      entityId: callLog!.id,
+      eventType: "call_summary_ready"
+    });
+
+    assert.equal(crmContract.entity.leadIntent, "handoff_request");
+    assert.equal(crmContract.entity.handoffRecommended, true);
   } finally {
     await cleanupRetellAnalysisFixture(fixture);
   }

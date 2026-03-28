@@ -27,6 +27,8 @@ import { createIntegrationsRepository } from "../src/modules/integrations/reposi
 import { createIntegrationsService } from "../src/modules/integrations/service.js";
 import {
   N8N_CALLBACK_SECRET_HEADER,
+  parseBookingResultCallbackBody,
+  parseCrmDeliveryCallbackBody,
   type BookingWorkflowDispatchContract,
   type CrmWebhookDispatchContract
 } from "../src/modules/integrations/types.js";
@@ -150,6 +152,7 @@ async function insertFixture() {
     customerName: "Ada Yilmaz",
     customerPhone: "+905551112233",
     customerEmail: "ada@example.com",
+    preferredTimeWindow: "afternoon",
     preferredDatetime: new Date("2026-03-27T11:00:00.000Z"),
     status: "pending"
   });
@@ -275,6 +278,7 @@ test("booking workflow contract resolves the active office-scoped connection and
     assert.equal(contract.office.officeId, fixture.officeId);
     assert.equal(contract.showingRequest.id, fixture.showingRequestId);
     assert.equal(contract.showingRequest.listingId, fixture.listingId);
+    assert.equal(contract.showingRequest.preferredTimeWindow, "afternoon");
     assert.equal(contract.callback.path, "/v1/webhooks/n8n/booking-results");
     assert.equal(contract.callback.secretHeader, N8N_CALLBACK_SECRET_HEADER);
     assert.equal(
@@ -357,6 +361,34 @@ test("crm webhook contract resolves an office-scoped call log payload", async ()
   }
 });
 
+test("crm webhook contract preserves showing request flexible time windows", async () => {
+  const fixture = await insertFixture();
+  const service = createIntegrationsService({
+    repository: createIntegrationsRepository(db)
+  });
+
+  try {
+    const contract: CrmWebhookDispatchContract =
+      await service.getCrmWebhookContract({
+        officeId: fixture.officeId,
+        entityType: "showing_request",
+        entityId: fixture.showingRequestId,
+        eventType: "showing_request_created"
+      });
+
+    assert.equal(contract.kind, "crm_webhook");
+    assert.equal(contract.connection.id, fixture.crmConnectionId);
+    assert.equal(contract.office.officeId, fixture.officeId);
+    assert.equal(contract.entity.entityType, "showing_request");
+    assert.equal(contract.entity.id, fixture.showingRequestId);
+    assert.equal(contract.entity.preferredTimeWindow, "afternoon");
+    assert.equal(contract.event.eventType, "showing_request_created");
+    assert.equal(contract.callback.path, "/v1/webhooks/n8n/crm-deliveries");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("default app wiring registers the booking and CRM callback routes when env secrets exist", async () => {
   const app = await createApp({
     readyCheck: async () => undefined
@@ -383,6 +415,46 @@ test("default app wiring registers the booking and CRM callback routes when env 
     crmResponse.json().error.code,
     "N8N_CRM_CALLBACK_FORBIDDEN"
   );
+});
+
+test("integration callback parsers normalize null and blank optional provider fields", () => {
+  const bookingPayload = parseBookingResultCallbackBody({
+    officeId: randomUUID(),
+    showingRequestId: randomUUID(),
+    connectionId: randomUUID(),
+    status: "confirmed",
+    workflowRunId: "",
+    externalBookingId: null,
+    scheduledDatetime: " ",
+    note: "   ",
+    payload: {
+      attempt: 1
+    }
+  });
+
+  assert.equal(bookingPayload.workflowRunId, undefined);
+  assert.equal(bookingPayload.externalBookingId, undefined);
+  assert.equal(bookingPayload.scheduledDatetime, undefined);
+  assert.equal(bookingPayload.note, undefined);
+
+  const crmPayload = parseCrmDeliveryCallbackBody({
+    officeId: randomUUID(),
+    connectionId: randomUUID(),
+    entityType: "showing_request",
+    entityId: randomUUID(),
+    eventType: "showing_request_created",
+    deliveryStatus: "delivered",
+    workflowRunId: null,
+    externalRecordId: "",
+    note: " ",
+    payload: {
+      deliveryAttempt: 2
+    }
+  });
+
+  assert.equal(crmPayload.workflowRunId, undefined);
+  assert.equal(crmPayload.externalRecordId, undefined);
+  assert.equal(crmPayload.note, undefined);
 });
 
 test("booking result callback updates showing request status and records an audit event", async () => {

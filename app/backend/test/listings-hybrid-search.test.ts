@@ -13,6 +13,7 @@ import {
   offices,
   tenants
 } from "../src/db/schema/index.js";
+import { AppError } from "../src/lib/errors.js";
 import { createListingsRepository } from "../src/modules/listings/repository.js";
 import { createListingsService } from "../src/modules/listings/service.js";
 
@@ -44,7 +45,154 @@ async function cleanupFixture(input: {
   await db.delete(tenants).where(inArray(tenants.id, input.tenantIds));
 }
 
-test("hybrid lexical search uses main documents and preserves office plus active isolation", async () => {
+test("listing reference lookup resolves deterministic spoken spacing and hyphen variants", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const listingId = randomUUID();
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Reference Variant Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Reference Variant Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values({
+    id: listingId,
+    officeId,
+    referenceCode: "DEMO-IST-3401",
+    title: "Reference Variant Listing",
+    description: "Reference lookup normalization fixture.",
+    propertyType: "apartment",
+    listingType: "rent",
+    status: "active",
+    price: "65000.00",
+    currency: "TRY",
+    bedrooms: "2",
+    bathrooms: "1",
+    netM2: "95.00",
+    district: "Kadikoy",
+    neighborhood: "Moda"
+  });
+
+  try {
+    const spaced = await listingsService.getListingByReference({
+      officeId,
+      referenceCode: "DEMO IST 3401"
+    });
+    const lowercase = await listingsService.getListingByReference({
+      officeId,
+      referenceCode: "demo-ist-3401"
+    });
+    const dotted = await listingsService.getListingByReference({
+      officeId,
+      referenceCode: "DEMO \u0130ST 3401"
+    });
+
+    assert.equal(spaced.referenceCode, "DEMO-IST-3401");
+    assert.equal(lowercase.referenceCode, "DEMO-IST-3401");
+    assert.equal(dotted.referenceCode, "DEMO-IST-3401");
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [listingId]
+    });
+  }
+});
+
+test("listing reference lookup preserves correctness boundaries for missing prefixes and ambiguous canonical forms", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const primaryListingId = randomUUID();
+  const ambiguousListingId = randomUUID();
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Reference Boundary Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Reference Boundary Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values([
+    {
+      id: primaryListingId,
+      officeId,
+      referenceCode: "DEMO-IST-3401",
+      title: "Reference Boundary Primary Listing",
+      description: "Primary reference lookup boundary fixture.",
+      propertyType: "apartment",
+      listingType: "rent",
+      status: "active",
+      price: "65000.00",
+      currency: "TRY",
+      bedrooms: "2",
+      bathrooms: "1",
+      netM2: "95.00",
+      district: "Kadikoy",
+      neighborhood: "Moda"
+    },
+    {
+      id: ambiguousListingId,
+      officeId,
+      referenceCode: "DEMO IST 3401",
+      title: "Reference Boundary Ambiguous Listing",
+      description: "Normalized collision fixture.",
+      propertyType: "apartment",
+      listingType: "rent",
+      status: "active",
+      price: "66000.00",
+      currency: "TRY",
+      bedrooms: "2",
+      bathrooms: "1",
+      netM2: "96.00",
+      district: "Kadikoy",
+      neighborhood: "Moda"
+    }
+  ]);
+
+  try {
+    await assert.rejects(
+      () =>
+        listingsService.getListingByReference({
+          officeId,
+          referenceCode: "IST 3401"
+        }),
+      (error: unknown) =>
+        error instanceof AppError &&
+        error.code === "LISTING_NOT_FOUND" &&
+        error.statusCode === 404
+    );
+
+    await assert.rejects(
+      () =>
+        listingsService.getListingByReference({
+          officeId,
+          referenceCode: "demoist3401"
+        }),
+      (error: unknown) =>
+        error instanceof AppError &&
+        error.code === "LISTING_REFERENCE_AMBIGUOUS" &&
+        error.statusCode === 409
+    );
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [primaryListingId, ambiguousListingId]
+    });
+  }
+});
+
+test("hybrid lexical search uses main documents, preserves office plus active isolation, and marks results as hybrid candidates", async () => {
   const tenantAId = randomUUID();
   const tenantBId = randomUUID();
   const officeAId = randomUUID();
@@ -184,7 +332,7 @@ test("hybrid lexical search uses main documents and preserves office plus active
   ]);
 
   try {
-    const results = await listingsService.searchListings({
+    const searchResult = await listingsService.searchListingsDetailed({
       officeId: officeAId,
       district: "Kadikoy",
       listingType: "rent",
@@ -192,11 +340,13 @@ test("hybrid lexical search uses main documents and preserves office plus active
       searchMode: "hybrid",
       limit: 5
     });
+    const results = searchResult.listings;
 
     assert.deepEqual(
       results.map((listing) => listing.id),
       [matchingListingId]
     );
+    assert.equal(searchResult.matchInterpretation, "hybrid_candidate");
     assert.equal(results[0]?.referenceCode, `REF-${matchingListingId.slice(0, 8)}`);
     assert.equal(results[0]?.status, "active");
     assert.equal(results[0]?.price, 55000);
@@ -249,18 +399,20 @@ test("structured fallback still works without queryText even when no search docu
   });
 
   try {
-    const results = await listingsService.searchListings({
+    const searchResult = await listingsService.searchListingsDetailed({
       officeId,
       district: "Kadikoy",
       listingType: "sale",
       searchMode: "structured",
       limit: 5
     });
+    const results = searchResult.listings;
 
     assert.deepEqual(
       results.map((listing) => listing.id),
       [listingId]
     );
+    assert.equal(searchResult.matchInterpretation, "verified_structured_match");
     assert.equal(results[0]?.referenceCode, `REF-${listingId.slice(0, 8)}`);
     assert.equal(results[0]?.price, 7800000);
   } finally {
@@ -272,7 +424,67 @@ test("structured fallback still works without queryText even when no search docu
   }
 });
 
-test("hybrid search falls back to structured results when queryText misses but hard filters still match", async () => {
+test("structured search matches Turkish diacritics against ASCII stored district and neighborhood", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const listingId = randomUUID();
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Accent Normalization Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Accent Normalization Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values({
+    id: listingId,
+    officeId,
+    referenceCode: `REF-${listingId.slice(0, 8)}`,
+    title: "Accent Normalization Listing",
+    description: "ASCII stored district and neighborhood should still match.",
+    propertyType: "apartment",
+    listingType: "rent",
+    status: "active",
+    price: "64000.00",
+    currency: "TRY",
+    bedrooms: "2",
+    bathrooms: "1",
+    netM2: "100.00",
+    district: "Kadikoy",
+    neighborhood: "Fenerbahce"
+  });
+
+  try {
+    const results = await listingsService.searchListings({
+      officeId,
+      district: "Kadıköy",
+      neighborhood: "Fenerbahçe",
+      listingType: "rent",
+      searchMode: "structured",
+      limit: 5
+    });
+
+    assert.deepEqual(
+      results.map((listing) => listing.id),
+      [listingId]
+    );
+    assert.equal(results[0]?.referenceCode, `REF-${listingId.slice(0, 8)}`);
+    assert.equal(results[0]?.district, "Kadikoy");
+    assert.equal(results[0]?.neighborhood, "Fenerbahce");
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [listingId]
+    });
+  }
+});
+
+test("hybrid search stays empty and marks no_match when queryText misses even if hard filters still match", async () => {
   const tenantId = randomUUID();
   const officeId = randomUUID();
   const fallbackListingId = randomUUID();
@@ -343,7 +555,7 @@ test("hybrid search falls back to structured results when queryText misses but h
   ]);
 
   try {
-    const results = await listingsService.searchListings({
+    const searchResult = await listingsService.searchListingsDetailed({
       officeId,
       district: "Kadikoy",
       listingType: "rent",
@@ -351,13 +563,10 @@ test("hybrid search falls back to structured results when queryText misses but h
       searchMode: "hybrid",
       limit: 5
     });
+    const results = searchResult.listings;
 
-    assert.deepEqual(
-      results.map((listing) => listing.id),
-      [fallbackListingId]
-    );
-    assert.equal(results[0]?.referenceCode, `REF-${fallbackListingId.slice(0, 8)}`);
-    assert.equal(results[0]?.status, "active");
+    assert.deepEqual(results, []);
+    assert.equal(searchResult.matchInterpretation, "no_match");
   } finally {
     await cleanupFixture({
       tenantIds: [tenantId],

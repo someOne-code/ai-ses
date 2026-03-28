@@ -15,6 +15,7 @@
     "smoke:n8n-booking-google-calendar": "node --import tsx --test test/n8n-booking-runtime-smoke.test.ts --test-name-pattern \"Google Calendar\"",
     "smoke:n8n-crm-workflow": "node --import tsx --test test/n8n-crm-runtime-smoke.test.ts",
     "smoke:n8n-local-chain": "node --import tsx --test test/n8n-chained-runtime-smoke.test.ts",
+    "smoke:retell-web-call": "tsx scripts/retell-web-call-smoke.ts",
     "smoke:gemini-embedding": "tsx scripts/gemini-embedding-smoke.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

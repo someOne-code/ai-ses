@@ -30,6 +30,7 @@ export function createShowingRequestsRepository(db: Database) {
           customerName: input.customerName,
           customerPhone: input.customerPhone,
           customerEmail: input.customerEmail ?? null,
+          preferredTimeWindow: input.preferredTimeWindow ?? null,
           preferredDatetime: input.preferredDatetime,
           status: "pending"
         })
@@ -40,6 +41,7 @@ export function createShowingRequestsRepository(db: Database) {
           customerName: showingRequests.customerName,
           customerPhone: showingRequests.customerPhone,
           customerEmail: showingRequests.customerEmail,
+          preferredTimeWindow: showingRequests.preferredTimeWindow,
           preferredDatetime: showingRequests.preferredDatetime,
           status: showingRequests.status,
           createdAt: showingRequests.createdAt

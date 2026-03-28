@@ -7,6 +7,7 @@ import type {
   ListingDetail,
   ListingSearchDocumentRefreshParams,
   MainListingSearchDocumentRefreshResult,
+  ListingSearchResult,
   ListingSearchItem,
   ListingByReferenceParams,
   SearchListingsFilters
@@ -32,72 +33,101 @@ export function createListingsService(
   const queryEmbeddingGenerator = options?.queryEmbeddingGenerator;
   const searchDocumentsService = options?.searchDocumentsService;
 
-  return {
-    async searchListings(filters: SearchListingsFilters): Promise<ListingSearchItem[]> {
-      let queryEmbedding: number[] | undefined;
+  function toListingSearchItem(
+    listing: Awaited<ReturnType<ListingsRepository["search"]>>["listings"][number]
+  ): ListingSearchItem {
+    return {
+      id: listing.id,
+      referenceCode: listing.referenceCode,
+      title: listing.title,
+      listingType: listing.listingType,
+      propertyType: listing.propertyType,
+      price: toNullableNumber(listing.price),
+      currency: listing.currency,
+      bedrooms: toNullableNumber(listing.bedrooms),
+      bathrooms: toNullableNumber(listing.bathrooms),
+      netM2: toNullableNumber(listing.netM2),
+      district: listing.district,
+      neighborhood: listing.neighborhood,
+      status: listing.status
+    };
+  }
 
-      if (
-        filters.searchMode === "hybrid" &&
-        filters.queryText &&
-        queryEmbeddingGenerator
-      ) {
-        try {
-          const embedding = await queryEmbeddingGenerator.generateQueryEmbedding(
-            filters.queryText
-          );
+  async function searchListingsDetailed(
+    filters: SearchListingsFilters
+  ): Promise<ListingSearchResult> {
+    let queryEmbedding: number[] | undefined;
 
-          queryEmbedding = embedding.values;
-        } catch (error) {
-          logger?.warn(
-            {
-              event: "hybrid_search_query_embedding_failed",
-              officeId: filters.officeId,
-              searchMode: filters.searchMode,
-              queryTextLength: filters.queryText.length,
-              fallback: "continue_without_vector_retrieval",
-              errorName:
-                error instanceof Error ? error.name : "UnknownError",
-              errorCode:
-                error instanceof AppError ? error.code : undefined,
-              errorMessage:
-                error instanceof Error ? error.message : "Unknown error."
-            },
-            "Hybrid search query embedding failed; continuing without vector retrieval."
-          );
-          queryEmbedding = undefined;
-        }
+    if (
+      filters.searchMode === "hybrid" &&
+      filters.queryText &&
+      queryEmbeddingGenerator
+    ) {
+      try {
+        const embedding = await queryEmbeddingGenerator.generateQueryEmbedding(
+          filters.queryText
+        );
+
+        queryEmbedding = embedding.values;
+      } catch (error) {
+        logger?.warn(
+          {
+            event: "hybrid_search_query_embedding_failed",
+            officeId: filters.officeId,
+            searchMode: filters.searchMode,
+            queryTextLength: filters.queryText.length,
+            fallback: "continue_without_vector_retrieval",
+            errorName:
+              error instanceof Error ? error.name : "UnknownError",
+            errorCode:
+              error instanceof AppError ? error.code : undefined,
+            errorMessage:
+              error instanceof Error ? error.message : "Unknown error."
+          },
+          "Hybrid search query embedding failed; continuing without vector retrieval."
+        );
+        queryEmbedding = undefined;
       }
+    }
 
-      const listings = await repository.search(
-        filters,
-        queryEmbedding ? { queryEmbedding } : undefined
-      );
+    const searchResult = await repository.search(
+      filters,
+      queryEmbedding ? { queryEmbedding } : undefined
+    );
 
-      return listings.map((listing) => ({
-        id: listing.id,
-        referenceCode: listing.referenceCode,
-        title: listing.title,
-        listingType: listing.listingType,
-        propertyType: listing.propertyType,
-        price: toNullableNumber(listing.price),
-        currency: listing.currency,
-        bedrooms: toNullableNumber(listing.bedrooms),
-        bathrooms: toNullableNumber(listing.bathrooms),
-        netM2: toNullableNumber(listing.netM2),
-        district: listing.district,
-        neighborhood: listing.neighborhood,
-        status: listing.status
-      }));
+    return {
+      listings: searchResult.listings.map(toListingSearchItem),
+      matchInterpretation: searchResult.matchInterpretation
+    };
+  }
+
+  return {
+    searchListingsDetailed,
+
+    async searchListings(filters: SearchListingsFilters): Promise<ListingSearchItem[]> {
+      const searchResult = await searchListingsDetailed(filters);
+
+      return searchResult.listings;
     },
 
     async getListingByReference(
       params: ListingByReferenceParams
     ): Promise<ListingDetail> {
-      const listing = await repository.findByReference(params);
+      const lookup = await repository.findByReference(params);
 
-      if (!listing) {
+      if (lookup.kind === "ambiguous") {
+        throw new AppError(
+          "Listing reference code is ambiguous. Please confirm the full code.",
+          409,
+          "LISTING_REFERENCE_AMBIGUOUS"
+        );
+      }
+
+      if (lookup.kind === "not_found") {
         throw new AppError("Listing not found.", 404, "LISTING_NOT_FOUND");
       }
+
+      const { listing } = lookup;
 
       return {
         id: listing.id,

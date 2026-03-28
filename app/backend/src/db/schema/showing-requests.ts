@@ -24,6 +24,7 @@ export const showingRequests = pgTable(
     customerName: text("customer_name").notNull(),
     customerPhone: text("customer_phone").notNull(),
     customerEmail: text("customer_email"),
+    preferredTimeWindow: text("preferred_time_window"),
     preferredDatetime: timestamp("preferred_datetime", {
       withTimezone: true
     }).notNull(),

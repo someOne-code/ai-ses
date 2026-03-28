@@ -144,60 +144,76 @@ const LISTING_FIXTURES: ListingFixture[] = [
 ];
 
 function createFakeListingsService(): ListingsService {
+  async function searchListingsDetailed(filters: Parameters<ListingsService["searchListings"]>[0]) {
+    const listings = LISTING_FIXTURES
+      .filter((listing) => listing.officeId === filters.officeId)
+      .filter((listing) => listing.status === "active")
+      .filter((listing) =>
+        filters.district ? listing.district === filters.district : true
+      )
+      .filter((listing) =>
+        filters.neighborhood
+          ? listing.neighborhood === filters.neighborhood
+          : true
+      )
+      .filter((listing) =>
+        filters.listingType ? listing.listingType === filters.listingType : true
+      )
+      .filter((listing) =>
+        filters.propertyType
+          ? listing.propertyType === filters.propertyType
+          : true
+      )
+      .filter((listing) =>
+        filters.minPrice !== undefined
+          ? (listing.price ?? 0) >= filters.minPrice
+          : true
+      )
+      .filter((listing) =>
+        filters.maxPrice !== undefined
+          ? (listing.price ?? 0) <= filters.maxPrice
+          : true
+      )
+      .filter((listing) =>
+        filters.minBedrooms !== undefined
+          ? (listing.bedrooms ?? 0) >= filters.minBedrooms
+          : true
+      )
+      .filter((listing) =>
+        filters.minBathrooms !== undefined
+          ? (listing.bathrooms ?? 0) >= filters.minBathrooms
+          : true
+      )
+      .filter((listing) =>
+        filters.minNetM2 !== undefined
+          ? (listing.netM2 ?? 0) >= filters.minNetM2
+          : true
+      )
+      .filter((listing) =>
+        filters.maxNetM2 !== undefined
+          ? (listing.netM2 ?? 0) <= filters.maxNetM2
+          : true
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, filters.limit)
+      .map(({ createdAt: _createdAt, officeId: _officeId, ...listing }) => listing);
+
+    return {
+      listings,
+      matchInterpretation:
+        filters.searchMode === "hybrid" && filters.queryText
+          ? "hybrid_candidate"
+          : "verified_structured_match"
+    } as const;
+  }
+
   return {
+    searchListingsDetailed,
+
     async searchListings(filters) {
-      return LISTING_FIXTURES
-        .filter((listing) => listing.officeId === filters.officeId)
-        .filter((listing) => listing.status === "active")
-        .filter((listing) =>
-          filters.district ? listing.district === filters.district : true
-        )
-        .filter((listing) =>
-          filters.neighborhood
-            ? listing.neighborhood === filters.neighborhood
-            : true
-        )
-        .filter((listing) =>
-          filters.listingType ? listing.listingType === filters.listingType : true
-        )
-        .filter((listing) =>
-          filters.propertyType
-            ? listing.propertyType === filters.propertyType
-            : true
-        )
-        .filter((listing) =>
-          filters.minPrice !== undefined
-            ? (listing.price ?? 0) >= filters.minPrice
-            : true
-        )
-        .filter((listing) =>
-          filters.maxPrice !== undefined
-            ? (listing.price ?? 0) <= filters.maxPrice
-            : true
-        )
-        .filter((listing) =>
-          filters.minBedrooms !== undefined
-            ? (listing.bedrooms ?? 0) >= filters.minBedrooms
-            : true
-        )
-        .filter((listing) =>
-          filters.minBathrooms !== undefined
-            ? (listing.bathrooms ?? 0) >= filters.minBathrooms
-            : true
-        )
-        .filter((listing) =>
-          filters.minNetM2 !== undefined
-            ? (listing.netM2 ?? 0) >= filters.minNetM2
-            : true
-        )
-        .filter((listing) =>
-          filters.maxNetM2 !== undefined
-            ? (listing.netM2 ?? 0) <= filters.maxNetM2
-            : true
-        )
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-        .slice(0, filters.limit)
-        .map(({ createdAt: _createdAt, officeId: _officeId, ...listing }) => listing);
+      const result = await searchListingsDetailed(filters);
+
+      return result.listings;
     },
 
     async getListingByReference(params) {
@@ -263,6 +279,7 @@ function createFakeShowingRequestsService() {
         customerName: input.customerName,
         customerPhone: input.customerPhone,
         customerEmail: input.customerEmail ?? null,
+        preferredTimeWindow: input.preferredTimeWindow ?? null,
         preferredDatetime: input.preferredDatetime.toISOString(),
         status: "pending",
         createdAt: "2026-03-24T09:30:00.000Z"
@@ -538,6 +555,17 @@ test("listing by reference does not return inactive listings", async () => {
     registerDatabasePlugin: false,
     readyCheck: async () => undefined,
     listingsService: {
+      async searchListingsDetailed(filters) {
+        const listings = await createFakeListingsService().searchListings(filters);
+
+        return {
+          listings,
+          matchInterpretation:
+            filters.searchMode === "hybrid" && filters.queryText
+              ? "hybrid_candidate"
+              : "verified_structured_match"
+        };
+      },
       async searchListings(filters) {
         return createFakeListingsService().searchListings(filters);
       },
@@ -670,13 +698,73 @@ test("showing request creation returns 201 for valid office and listing", async 
       customerName: "Ada Yilmaz",
       customerPhone: "+905551112233",
       customerEmail: "ada@example.com",
+      preferredTimeWindow: "afternoon",
       preferredDatetime: "2026-03-25T12:00:00.000Z"
     }
   });
 
   assert.equal(response.statusCode, 201);
   assert.equal(response.json().data.status, "pending");
+  assert.equal(response.json().data.preferredTimeWindow, "afternoon");
   assert.equal(showingRequests.createdRequests.length, 1);
+
+  await app.close();
+});
+
+test("showing request creation accepts a single caller name and blank optional email", async () => {
+  const showingRequests = createFakeShowingRequestsService();
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService: createFakeListingsService(),
+    showingRequestsService: showingRequests.service
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/offices/${OFFICE_1_ID}/showing-requests`,
+    payload: {
+      listingId: LISTING_FIXTURES[0].id,
+      customerName: "Umut",
+      customerPhone: "+905551112233",
+      customerEmail: "",
+      preferredDatetime: "2026-03-25T12:00:00.000Z"
+    }
+  });
+
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.json().data.customerName, "Umut");
+  assert.equal(response.json().data.customerEmail, null);
+  assert.equal(showingRequests.createdRequests.length, 1);
+  assert.equal(showingRequests.createdRequests[0]?.customerName, "Umut");
+  assert.equal(showingRequests.createdRequests[0]?.customerEmail, null);
+
+  await app.close();
+});
+
+test("showing request creation rejects literal callback placeholders", async () => {
+  const showingRequests = createFakeShowingRequestsService();
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService: createFakeListingsService(),
+    showingRequestsService: showingRequests.service
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/offices/${OFFICE_1_ID}/showing-requests`,
+    payload: {
+      listingId: LISTING_FIXTURES[0].id,
+      customerName: "Umut",
+      customerPhone: "{{user_number}}",
+      preferredDatetime: "2026-03-25T12:00:00.000Z"
+    }
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(showingRequests.createdRequests.length, 0);
 
   await app.close();
 });
@@ -758,6 +846,7 @@ test("showing request creation validates body payload", async () => {
       listingId: LISTING_FIXTURES[0].id,
       customerName: "",
       customerPhone: "+905551112233",
+      preferredTimeWindow: "lunch",
       preferredDatetime: "invalid"
     }
   });
@@ -784,6 +873,15 @@ test("Retell tool contracts expose the current Phase 1 capability set", () => {
 
   assert.equal(
     typeof searchListingsContract?.parameters.properties.queryText,
+    "object"
+  );
+
+  const createShowingRequestContract = retellToolContracts.find(
+    (tool) => tool.name === "create_showing_request"
+  );
+
+  assert.equal(
+    typeof createShowingRequestContract?.parameters.properties.preferredTimeWindow,
     "object"
   );
 });
@@ -829,23 +927,27 @@ test("hybrid search logs query embedding failures before continuing without vect
       async search(_filters, options) {
         capturedSearchOptions = options;
 
-        return [
-          {
-            id: LISTING_FIXTURES[0]!.id,
-            referenceCode: LISTING_FIXTURES[0]!.referenceCode,
-            title: LISTING_FIXTURES[0]!.title,
-            listingType: LISTING_FIXTURES[0]!.listingType,
-            propertyType: LISTING_FIXTURES[0]!.propertyType,
-            price: String(LISTING_FIXTURES[0]!.price),
-            currency: LISTING_FIXTURES[0]!.currency,
-            bedrooms: String(LISTING_FIXTURES[0]!.bedrooms),
-            bathrooms: String(LISTING_FIXTURES[0]!.bathrooms),
-            netM2: String(LISTING_FIXTURES[0]!.netM2),
-            district: LISTING_FIXTURES[0]!.district,
-            neighborhood: LISTING_FIXTURES[0]!.neighborhood,
-            status: LISTING_FIXTURES[0]!.status
-          }
-        ];
+        return {
+          listings: [
+            {
+              id: LISTING_FIXTURES[0]!.id,
+              referenceCode: LISTING_FIXTURES[0]!.referenceCode,
+              title: LISTING_FIXTURES[0]!.title,
+              listingType: LISTING_FIXTURES[0]!.listingType,
+              propertyType: LISTING_FIXTURES[0]!.propertyType,
+              price: String(LISTING_FIXTURES[0]!.price),
+              currency: LISTING_FIXTURES[0]!.currency,
+              bedrooms: String(LISTING_FIXTURES[0]!.bedrooms),
+              bathrooms: String(LISTING_FIXTURES[0]!.bathrooms),
+              netM2: String(LISTING_FIXTURES[0]!.netM2),
+              district: LISTING_FIXTURES[0]!.district,
+              neighborhood: LISTING_FIXTURES[0]!.neighborhood,
+              status: LISTING_FIXTURES[0]!.status,
+              createdAt: new Date(LISTING_FIXTURES[0]!.createdAt)
+            }
+          ],
+          matchInterpretation: "no_match" as const
+        };
       },
       async findByReference() {
         throw new Error("findByReference should not be called in this test");

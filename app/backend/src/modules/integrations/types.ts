@@ -5,6 +5,7 @@ import type {
   LeadIntent,
   LeadTemperature
 } from "../retell/post-call-analysis.js";
+import type { PreferredTimeWindow } from "../showing-requests/types.js";
 
 export const BOOKING_WORKFLOW_CONNECTION_KIND = "booking_workflow";
 export const CRM_WEBHOOK_CONNECTION_KIND = "crm_webhook";
@@ -15,6 +16,30 @@ export const CRM_DELIVERY_CALLBACK_PATH = "/v1/webhooks/n8n/crm-deliveries";
 const officeParamsSchema = z.object({
   officeId: z.string().uuid()
 });
+
+const optionalTrimmedString = z.preprocess((value) => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof value === "string" && value.trim() === "") {
+    return undefined;
+  }
+
+  return value;
+}, z.string().trim().min(1).optional());
+
+const optionalDatetimeString = z.preprocess((value) => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof value === "string" && value.trim() === "") {
+    return undefined;
+  }
+
+  return value;
+}, z.string().datetime({ offset: true }).optional());
 
 const showingRequestParamsSchema = officeParamsSchema.extend({
   showingRequestId: z.string().uuid()
@@ -44,10 +69,10 @@ const bookingResultCallbackBodySchema = z.object({
   showingRequestId: z.string().uuid(),
   connectionId: z.string().uuid(),
   status: z.enum(["confirmed", "failed", "canceled"]),
-  workflowRunId: z.string().trim().min(1).optional(),
-  externalBookingId: z.string().trim().min(1).optional(),
-  scheduledDatetime: z.string().datetime({ offset: true }).optional(),
-  note: z.string().trim().min(1).optional(),
+  workflowRunId: optionalTrimmedString,
+  externalBookingId: optionalTrimmedString,
+  scheduledDatetime: optionalDatetimeString,
+  note: optionalTrimmedString,
   payload: z.unknown().optional()
 });
 
@@ -66,9 +91,9 @@ const crmDeliveryCallbackBodySchema = z.object({
     "call_summary_ready"
   ]),
   deliveryStatus: z.enum(["delivered", "failed", "skipped"]),
-  workflowRunId: z.string().trim().min(1).optional(),
-  externalRecordId: z.string().trim().min(1).optional(),
-  note: z.string().trim().min(1).optional(),
+  workflowRunId: optionalTrimmedString,
+  externalRecordId: optionalTrimmedString,
+  note: optionalTrimmedString,
   payload: z.unknown().optional()
 });
 
@@ -101,6 +126,7 @@ export interface ShowingRequestIntegrationSource {
   customerName: string;
   customerPhone: string;
   customerEmail: string | null;
+  preferredTimeWindow: PreferredTimeWindow | null;
   preferredDatetime: string;
   status: string;
   createdAt: string;
@@ -149,6 +175,7 @@ export interface BookingWorkflowDispatchContract {
     customerName: string;
     customerPhone: string;
     customerEmail: string | null;
+    preferredTimeWindow: PreferredTimeWindow | null;
     preferredDatetime: string;
     status: string;
     createdAt: string;
@@ -199,6 +226,7 @@ export interface CrmWebhookDispatchContract {
         customerName: string;
         customerPhone: string;
         customerEmail: string | null;
+        preferredTimeWindow: PreferredTimeWindow | null;
         preferredDatetime: string;
         status: string;
       }

@@ -5,6 +5,7 @@ import type {
   CreateShowingRequestInput,
   ShowingRequestRecord
 } from "./types.js";
+import { asPreferredTimeWindow } from "./types.js";
 
 function toIsoString(value: Date): string {
   return value.toISOString();
@@ -42,6 +43,9 @@ export function createShowingRequestsService(
         customerName: showingRequest.customerName,
         customerPhone: showingRequest.customerPhone,
         customerEmail: showingRequest.customerEmail,
+        preferredTimeWindow: asPreferredTimeWindow(
+          showingRequest.preferredTimeWindow
+        ),
         preferredDatetime: toIsoString(showingRequest.preferredDatetime),
         status: showingRequest.status,
         createdAt: toIsoString(showingRequest.createdAt)

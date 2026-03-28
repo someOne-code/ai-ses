@@ -116,6 +116,7 @@ async function insertBookingDispatchFixture() {
     customerName: "Can Demir",
     customerPhone: "+905551234567",
     customerEmail: "can@example.com",
+    preferredTimeWindow: "morning",
     preferredDatetime: new Date("2026-03-28T10:00:00.000Z"),
     status: "pending"
   });
@@ -221,6 +222,7 @@ test("default app wiring uses the showing requests database service", async () =
         customerName: "Ada Yilmaz",
         customerPhone: "+905551112233",
         customerEmail: "ada@example.com",
+        preferredTimeWindow: "afternoon",
         preferredDatetime: "2026-03-28T13:00:00.000Z"
       }
     });
@@ -228,6 +230,7 @@ test("default app wiring uses the showing requests database service", async () =
     assert.equal(response.statusCode, 201);
     assert.equal(response.json().data.officeId, fixture.officeId);
     assert.equal(response.json().data.listingId, fixture.listingId);
+    assert.equal(response.json().data.preferredTimeWindow, "afternoon");
     assert.equal(response.json().data.status, "pending");
 
     const rows = await db
@@ -235,6 +238,7 @@ test("default app wiring uses the showing requests database service", async () =
         id: showingRequests.id,
         officeId: showingRequests.officeId,
         listingId: showingRequests.listingId,
+        preferredTimeWindow: showingRequests.preferredTimeWindow,
         status: showingRequests.status
       })
       .from(showingRequests)
@@ -244,7 +248,48 @@ test("default app wiring uses the showing requests database service", async () =
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.officeId, fixture.officeId);
     assert.equal(rows[0]?.listingId, fixture.listingId);
+    assert.equal(rows[0]?.preferredTimeWindow, "afternoon");
     assert.equal(rows[0]?.status, "pending");
+  } finally {
+    await cleanupShowingRequestFixture(fixture);
+  }
+});
+
+test("default app wiring accepts single-name showing requests without forcing surname or email", async () => {
+  const fixture = await insertShowingRequestFixture();
+  const app = await createApp({
+    readyCheck: async () => undefined
+  });
+
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/offices/${fixture.officeId}/showing-requests`,
+      payload: {
+        listingId: fixture.listingId,
+        customerName: "Umut",
+        customerPhone: "+905551112233",
+        customerEmail: "",
+        preferredDatetime: "2026-03-28T13:00:00.000Z"
+      }
+    });
+
+    assert.equal(response.statusCode, 201);
+    assert.equal(response.json().data.customerName, "Umut");
+    assert.equal(response.json().data.customerEmail, null);
+
+    const rows = await db
+      .select({
+        customerName: showingRequests.customerName,
+        customerEmail: showingRequests.customerEmail
+      })
+      .from(showingRequests)
+      .where(eq(showingRequests.id, response.json().data.id))
+      .limit(1);
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.customerName, "Umut");
+    assert.equal(rows[0]?.customerEmail, null);
   } finally {
     await cleanupShowingRequestFixture(fixture);
   }
