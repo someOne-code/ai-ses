@@ -52,4 +52,5 @@ These settings must be enabled in GitHub. They cannot be fully enforced from the
 
 - `scripts/open-ai-draft-pr.ps1` expects GitHub CLI `v2.88.0` or newer so `@copilot` can be requested as a reviewer.
 - If your current branch already has a PR, the script reuses it and only refreshes the Copilot review request.
+- If Copilot review automation was enabled after a draft PR was already open, push one more commit to retrigger review on that PR.
 - If you prefer, you can also run the workflow manually from the Actions tab with a PR number.
