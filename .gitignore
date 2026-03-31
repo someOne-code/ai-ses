@@ -19,8 +19,6 @@ emlak/
 .local-only/
 .local-rules/
 .*
-!.github/
-!.github/**
 /??????.md
 *.rules.md
 docs/*playbook*.md
