@@ -2439,12 +2439,5 @@
     "callerPolicy": "workflowsFromSameOwner",
     "executionOrder": "v0"
   },
-  "versionId": "dcb8ea4c-550a-42a1-bbad-91bf14d05e46",
-  "meta": {
-    "templateId": "5890",
-    "templateCredsSetupCompleted": true,
-    "instanceId": "90ef2d4e027eed2628dad3f353492b4b9186354b01db78bd56867e2c365cdebc"
-  },
-  "id": "7Ynt3yzCrhTO6xM0",
   "tags": []
 }

@@ -15,33 +15,49 @@ type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-const { values } = parseArgs({
-  args: process.argv.slice(2),
-  options: {
-    agentId: { type: "string" },
-    outDir: { type: "string" }
-  }
-});
-
-const apiKey = process.env.RETELL_API_KEY;
-const agentId = values.agentId;
-
-if (!apiKey) {
-  throw new Error("Missing RETELL_API_KEY in app/backend/.env");
-}
-
-if (!agentId) {
-  throw new Error(
-    "Missing --agentId. Example: npm run retell:export-config -- --agentId agent_xxx"
-  );
-}
-
-const retell = new Retell({ apiKey });
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(scriptDir, "..");
-const snapshotsRoot =
-  values.outDir ??
-  path.join(backendDir, ".tmp", "retell-account-snapshots");
+const defaultSnapshotsRoot = path.join(
+  backendDir,
+  ".tmp",
+  "retell-account-snapshots"
+);
+
+type SnapshotLabel = "published" | "draft";
+
+interface LlmRef {
+  label: SnapshotLabel;
+  id: string;
+  version: number;
+}
+
+interface LlmEntry extends LlmRef {
+  llm: unknown;
+}
+
+type RetellExportClient = Pick<
+  Retell,
+  "agent" | "llm" | "voice" | "knowledgeBase" | "phoneNumber"
+>;
+
+interface ExportRetellConfigParams {
+  retell: RetellExportClient;
+  agentId: string;
+  snapshotsRoot?: string;
+  exportedAt?: Date;
+}
+
+export interface ExportRetellConfigResult {
+  ok: true;
+  snapshotDir: string;
+  latestDir: string;
+  publishedAgentVersion: number;
+  publishedLlmVersion: number | null;
+  draftAgentVersion: number | null;
+  draftLlmVersion: number | null;
+  boundPhoneNumbers: number;
+  usedVoiceIds: string[];
+}
 
 function sanitizeTimestamp(date: Date) {
   return date.toISOString().replace(/[:.]/g, "-");
@@ -65,6 +81,61 @@ function extractVoiceIds(agent: Record<string, unknown>) {
     : [];
 
   return unique([...primary, ...fallbacks]);
+}
+
+function collectLlmRefs(
+  publishedAgent: Awaited<ReturnType<Retell["agent"]["retrieve"]>>,
+  draftAgent: Awaited<ReturnType<Retell["agent"]["retrieve"]>> | null
+) {
+  return unique(
+    [
+      {
+        id:
+          publishedAgent.response_engine.type === "retell-llm"
+            ? publishedAgent.response_engine.llm_id
+            : null,
+        version:
+          publishedAgent.response_engine.type === "retell-llm"
+            ? publishedAgent.response_engine.version
+            : null,
+        label: "published"
+      },
+      {
+        id:
+          draftAgent?.response_engine.type === "retell-llm"
+            ? draftAgent.response_engine.llm_id
+            : null,
+        version:
+          draftAgent?.response_engine.type === "retell-llm"
+            ? draftAgent.response_engine.version
+            : null,
+        label: "draft"
+      }
+    ]
+      .filter(
+        (
+          ref
+        ): ref is {
+          id: string;
+          version: number;
+          label: SnapshotLabel;
+        } => typeof ref.id === "string" && typeof ref.version === "number"
+      )
+      .map((ref) => `${ref.label}|${ref.id}|${ref.version}`)
+  ).map((key) => {
+    const [label, id, version] = key.split("|");
+    return {
+      label: label as SnapshotLabel,
+      id,
+      version: Number(version)
+    };
+  });
+}
+
+function mapLlmEntriesByLabel(entries: LlmEntry[]) {
+  return Object.fromEntries(
+    entries.map((entry) => [entry.label, entry])
+  ) as Partial<Record<SnapshotLabel, LlmEntry>>;
 }
 
 function isPhoneBoundToAgent(
@@ -99,7 +170,7 @@ function isPhoneBoundToAgent(
   return singleInbound || singleOutbound || inboundPool || outboundPool;
 }
 
-async function safeRetrieveVoice(voiceId: string) {
+async function safeRetrieveVoice(retell: RetellExportClient, voiceId: string) {
   try {
     return await retell.voice.retrieve(voiceId);
   } catch (error) {
@@ -110,7 +181,10 @@ async function safeRetrieveVoice(voiceId: string) {
   }
 }
 
-async function safeRetrieveKnowledgeBase(knowledgeBaseId: string) {
+async function safeRetrieveKnowledgeBase(
+  retell: RetellExportClient,
+  knowledgeBaseId: string
+) {
   try {
     return await retell.knowledgeBase.retrieve(knowledgeBaseId);
   } catch (error) {
@@ -121,8 +195,12 @@ async function safeRetrieveKnowledgeBase(knowledgeBaseId: string) {
   }
 }
 
-async function main() {
-  const exportedAt = new Date();
+export async function exportRetellConfig({
+  retell,
+  agentId,
+  snapshotsRoot = defaultSnapshotsRoot,
+  exportedAt = new Date()
+}: ExportRetellConfigParams): Promise<ExportRetellConfigResult> {
   const agentVersions = await retell.agent.getVersions(agentId);
   const sortedVersions = [...agentVersions].sort((a, b) => a.version - b.version);
   const publishedVersions = sortedVersions.filter((version) => version.is_published);
@@ -145,49 +223,7 @@ async function main() {
     ? await retell.agent.retrieve(agentId, { version: draft.version })
     : null;
 
-  const llmRefs = unique(
-    [
-      {
-        id:
-          publishedAgent.response_engine.type === "retell-llm"
-            ? publishedAgent.response_engine.llm_id
-            : null,
-        version:
-          publishedAgent.response_engine.type === "retell-llm"
-            ? publishedAgent.response_engine.version
-            : null,
-        label: "published"
-      },
-      {
-        id:
-          draftAgent?.response_engine.type === "retell-llm"
-            ? draftAgent.response_engine.llm_id
-            : null,
-        version:
-          draftAgent?.response_engine.type === "retell-llm"
-            ? draftAgent.response_engine.version
-            : null,
-        label: "draft"
-      }
-    ]
-      .filter(
-        (
-          ref
-        ): ref is {
-          id: string;
-          version: number;
-          label: "published" | "draft";
-        } => typeof ref.id === "string" && typeof ref.version === "number"
-      )
-      .map((ref) => `${ref.label}|${ref.id}|${ref.version}`)
-  ).map((key) => {
-    const [label, id, version] = key.split("|");
-    return {
-      label: label as "published" | "draft",
-      id,
-      version: Number(version)
-    };
-  });
+  const llmRefs = collectLlmRefs(publishedAgent, draftAgent);
 
   const llmEntries = await Promise.all(
     llmRefs.map(async (ref) => ({
@@ -196,12 +232,7 @@ async function main() {
     }))
   );
 
-  const llmByLabel = Object.fromEntries(
-    llmEntries.map((entry) => [entry.label, entry])
-  ) as Record<
-    "published" | "draft",
-    { id: string; version: number; label: "published" | "draft"; llm: unknown }
-  >;
+  const llmByLabel = mapLlmEntriesByLabel(llmEntries);
 
   const voiceIds = unique([
     ...extractVoiceIds(publishedAgent as unknown as Record<string, unknown>),
@@ -213,7 +244,7 @@ async function main() {
   const voices = await Promise.all(
     voiceIds.map(async (voiceId) => ({
       voiceId,
-      detail: await safeRetrieveVoice(voiceId)
+      detail: await safeRetrieveVoice(retell, voiceId)
     }))
   );
 
@@ -233,7 +264,7 @@ async function main() {
   const knowledgeBases = await Promise.all(
     knowledgeBaseIds.map(async (knowledgeBaseId) => ({
       knowledgeBaseId,
-      detail: await safeRetrieveKnowledgeBase(knowledgeBaseId)
+      detail: await safeRetrieveKnowledgeBase(retell, knowledgeBaseId)
     }))
   );
 
@@ -251,8 +282,10 @@ async function main() {
       draftAgent?.response_engine.type === "retell-llm"
         ? draftAgent.response_engine.version
         : null,
-    responseEngineType:
-      publishedAgent.response_engine.type,
+    responseEngineType: publishedAgent.response_engine.type,
+    draftResponseEngineType: draftAgent?.response_engine.type ?? null,
+    publishedHasLlmArtifact: Boolean(llmByLabel.published),
+    draftHasLlmArtifact: Boolean(llmByLabel.draft),
     usedVoiceIds: voiceIds,
     boundPhoneNumbers: boundPhoneNumbers.map((phoneNumber) => ({
       phone_number: phoneNumber.phone_number,
@@ -275,8 +308,8 @@ async function main() {
     "",
     "## Recreate On A New Account",
     "",
-    "1. Recreate the Retell LLM from `published/llm.json` or `draft/llm.json`.",
-    "2. Recreate the agent from `published/agent.json` or `draft/agent.json` and point it to the new LLM id.",
+    "1. If `published/llm.json` or `draft/llm.json` exists, recreate the Retell LLM from that file.",
+    "2. Recreate the agent from `published/agent.json` or `draft/agent.json`. For non-`retell-llm` snapshots, reuse the exported `response_engine` block directly.",
     "3. Reapply voice settings using `voices/*.json`.",
     "4. Recreate any knowledge bases listed in `knowledge-bases/*.json` if they exist.",
     "5. Rebind or repurchase phone numbers using `phone-numbers/bound-to-agent.json`.",
@@ -284,7 +317,7 @@ async function main() {
     "",
     "## Account-Bound IDs",
     "",
-    "- `agent_id`, `llm_id`, `voice_id`, `knowledge_base_id`, `mcp_id`, and phone-number bindings are account-specific.",
+    "- `agent_id`, `llm_id`, `voice_id`, `knowledge_base_id`, `conversation_flow_id`, `mcp_id`, and phone-number bindings are account-specific.",
     "- Prompts, states, tool descriptions, voice parameters, webhook URLs, and most runtime settings can be copied from these files.",
     "- Custom voices may need to be recloned or re-added in the new account."
   ].join("\n");
@@ -300,10 +333,12 @@ async function main() {
     path.join(snapshotDir, "published", "agent.json"),
     publishedAgent as unknown as JsonValue
   );
-  await writeJson(
-    path.join(snapshotDir, "published", "llm.json"),
-    llmByLabel.published.llm as JsonValue
-  );
+  if (llmByLabel.published) {
+    await writeJson(
+      path.join(snapshotDir, "published", "llm.json"),
+      llmByLabel.published.llm as JsonValue
+    );
+  }
 
   if (draftAgent) {
     await writeJson(
@@ -351,28 +386,57 @@ async function main() {
   await rm(latestDir, { recursive: true, force: true });
   await cp(snapshotDir, latestDir, { recursive: true });
 
-  console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        snapshotDir,
-        latestDir,
-        publishedAgentVersion: published.version,
-        publishedLlmVersion: manifest.publishedLlmVersion,
-        draftAgentVersion: draft?.version ?? null,
-        draftLlmVersion: manifest.draftLlmVersion,
-        boundPhoneNumbers: manifest.boundPhoneNumbers.length,
-        usedVoiceIds: voiceIds
-      },
-      null,
-      2
-    )
-  );
+  return {
+    ok: true,
+    snapshotDir,
+    latestDir,
+    publishedAgentVersion: published.version,
+    publishedLlmVersion: manifest.publishedLlmVersion,
+    draftAgentVersion: draft?.version ?? null,
+    draftLlmVersion: manifest.draftLlmVersion,
+    boundPhoneNumbers: manifest.boundPhoneNumbers.length,
+    usedVoiceIds: voiceIds
+  };
 }
 
-void main().catch((error) => {
+async function main() {
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      agentId: { type: "string" },
+      outDir: { type: "string" }
+    }
+  });
+  const apiKey = process.env.RETELL_API_KEY;
+  const agentId = values.agentId;
+
+  if (!apiKey) {
+    throw new Error("Missing RETELL_API_KEY in app/backend/.env");
+  }
+
+  if (!agentId) {
+    throw new Error(
+      "Missing --agentId. Example: npm run retell:export-config -- --agentId agent_xxx"
+    );
+  }
+
+  const result = await exportRetellConfig({
+    retell: new Retell({ apiKey }),
+    agentId,
+    snapshotsRoot: values.outDir ?? defaultSnapshotsRoot
+  });
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  void main().catch((error) => {
   console.error(
     error instanceof Error ? error.stack ?? error.message : String(error)
   );
   process.exitCode = 1;
-});
+  });
+}

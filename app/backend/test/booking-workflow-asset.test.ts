@@ -4,6 +4,8 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { REQUIRED_GOOGLE_CALENDAR_NODE_NAMES } from "./helpers/google-calendar-credential-guard.ts";
+
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const workflowPath = path.resolve(
   currentDir,
@@ -25,6 +27,9 @@ async function readWorkflow() {
       name: string;
       nodes: WorkflowNode[];
       connections: Record<string, unknown>;
+      id?: string;
+      versionId?: string;
+      meta?: unknown;
     }
   };
 }
@@ -35,6 +40,14 @@ test("booking workflow asset is project-owned and parseable", async () => {
   assert.equal(workflow.name, "ai-ses - Booking Flow");
   assert.ok(Array.isArray(workflow.nodes));
   assert.ok(workflow.nodes.length >= 10);
+});
+
+test("booking workflow asset stays import-safe for local n8n", async () => {
+  const { workflow } = await readWorkflow();
+
+  assert.equal(workflow.id, undefined);
+  assert.equal(workflow.versionId, undefined);
+  assert.equal(workflow.meta, undefined);
 });
 
 test("booking workflow asset uses only the intended standard node patterns", async () => {
@@ -185,6 +198,7 @@ test("booking workflow asset uses fixed backend callback contract and narrows un
   assert.equal(normalizeAssignments.includes("bookingUrl"), false);
   assert.ok(normalizeAssignments.includes("providerKind"));
   assert.ok(normalizeAssignments.includes("calendarId"));
+  assert.ok(normalizeAssignments.includes("cleanupCreatedEvent"));
 
   for (const node of providerNodes) {
     const parameters = node.parameters as { url?: string };
@@ -202,13 +216,18 @@ test("booking workflow asset uses fixed backend callback contract and narrows un
   }
 
   const googleProviderNodes = workflow.nodes.filter((node) =>
-    [
-      "Check Google Calendar Availability",
-      "Create Google Calendar Event"
-    ].includes(node.name)
+    REQUIRED_GOOGLE_CALENDAR_NODE_NAMES.includes(
+      node.name as (typeof REQUIRED_GOOGLE_CALENDAR_NODE_NAMES)[number]
+    )
   );
 
-  assert.equal(googleProviderNodes.length, 2);
+  assert.deepEqual(
+    workflow.nodes
+      .filter((node) => node.type === "n8n-nodes-base.googleCalendar")
+      .map((node) => node.name)
+      .sort(),
+    [...REQUIRED_GOOGLE_CALENDAR_NODE_NAMES].sort()
+  );
 
   for (const node of googleProviderNodes) {
     const parameters = node.parameters as {
@@ -240,7 +259,7 @@ test("booking workflow asset uses fixed backend callback contract and narrows un
     const headers = parameters.headerParameters?.parameters ?? [];
     const expectedNormalizeNodeName =
       node.name === "Send Confirmed Result Callback"
-        ? "Normalize Confirmed Callback Result"
+        ? "If Cleanup Created Event Requested"
         : node.name === "Send Failed Result Callback"
           ? "Normalize Failed Callback Result"
           : "Normalize Booking Creation Failed Callback Result";
@@ -292,6 +311,21 @@ test("booking workflow asset uses fixed backend callback contract and narrows un
     });
   }
 
+  assert.equal(
+    (
+      workflow.nodes.find(
+        (node) => node.name === "Normalize Confirmed Callback Result"
+      )?.parameters as {
+        assignments?: {
+          assignments?: Array<{ name: string; value: string; type: string }>;
+        };
+      }
+    ).assignments?.assignments?.find(
+      (assignment) => assignment.name === "callbackAccepted"
+    )?.value,
+    "={{ Boolean($('Send Confirmed Result Callback').item.json.data?.received) }}"
+  );
+
   assert.deepEqual(workflow.connections["Normalize Dispatch"], {
     main: [[{ node: "If Google Calendar Provider", type: "main", index: 0 }]]
   });
@@ -340,6 +374,18 @@ test("booking workflow asset uses fixed backend callback contract and narrows un
   assert.deepEqual(workflow.connections["Create Google Calendar Event"], {
     main: [[{ node: "If Booking Creation Succeeded", type: "main", index: 0 }]]
   });
+  assert.deepEqual(workflow.connections["Send Confirmed Result Callback"], {
+    main: [[{ node: "If Cleanup Created Event Requested", type: "main", index: 0 }]]
+  });
+  assert.deepEqual(workflow.connections["If Cleanup Created Event Requested"], {
+    main: [
+      [{ node: "Delete Google Calendar Event", type: "main", index: 0 }],
+      [{ node: "Normalize Confirmed Callback Result", type: "main", index: 0 }]
+    ]
+  });
+  assert.deepEqual(workflow.connections["Delete Google Calendar Event"], {
+    main: [[{ node: "Normalize Confirmed Callback Result", type: "main", index: 0 }]]
+  });
   assert.deepEqual(workflow.connections["If Booking Creation Succeeded"], {
     main: [
       [{ node: "If Confirmation Delay Needed", type: "main", index: 0 }],
@@ -375,6 +421,27 @@ test("booking workflow asset uses fixed backend callback contract and narrows un
       callbackNodes.find((node) => node.name === "Send Confirmed Result Callback")
         ?.parameters as { jsonBody?: string }
     ).jsonBody?.includes('"externalBookingId": {{ JSON.stringify($json.externalBookingId || $json.id || $json.eventId || null) }}')
+  );
+  assert.deepEqual(
+    (
+      workflow.nodes.find((node) => node.name === "Delete Google Calendar Event")
+        ?.parameters as {
+          calendar?: { __rl?: boolean; mode?: string; value?: string };
+          eventId?: string;
+          operation?: string;
+        }
+    ),
+    {
+      resource: "event",
+      operation: "delete",
+      calendar: {
+        __rl: true,
+        mode: "id",
+        value: "={{ $('Normalize Dispatch').item.json.calendarId }}"
+      },
+      eventId: "={{ $('Create Google Calendar Event').item.json.id }}",
+      options: {}
+    }
   );
   assert.deepEqual(
     (

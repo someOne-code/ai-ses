@@ -6,6 +6,7 @@ import { buildListingSpeechPresentation } from "../listings/speech.js";
 import type { ListingsService } from "../listings/service.js";
 import type { ShowingRequestsService } from "../showing-requests/service.js";
 import { normalizeRetellLeadQualification } from "./post-call-analysis.js";
+import { getCanonicalRetellRepair } from "./repair-messages.js";
 import type {
   ResolvedOfficeContext,
   RetellRepository
@@ -29,6 +30,12 @@ interface RetellServiceOptions {
   listingsService: ListingsService;
   showingRequestsService: ShowingRequestsService;
   webhookSecret?: string;
+}
+
+interface RetellSignedRequestInput {
+  signature: string | undefined;
+  body: unknown;
+  rawBody: string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -145,24 +152,29 @@ function getCallerSafeFailureMessage(
 }
 
 export function createRetellService(options: RetellServiceOptions) {
-  async function ensureWebhookSecret(): Promise<string> {
-    const webhookSecret = options.webhookSecret ?? env.RETELL_WEBHOOK_SECRET;
+  async function ensureVerificationKey(): Promise<string> {
+    const verificationKey =
+      options.webhookSecret ??
+      process.env.RETELL_API_KEY ??
+      env.RETELL_API_KEY ??
+      process.env.RETELL_WEBHOOK_SECRET ??
+      env.RETELL_WEBHOOK_SECRET;
 
-    if (!webhookSecret) {
+    if (!verificationKey) {
       throw new AppError(
-        "Retell webhook secret is not configured.",
+        "Retell verification key is not configured.",
         503,
         "RETELL_WEBHOOK_SECRET_MISSING"
       );
     }
 
-    return webhookSecret;
+    return verificationKey;
   }
 
-  async function verifySignature(signature: string | undefined, body: unknown) {
-    const webhookSecret = await ensureWebhookSecret();
+  async function verifySignature(input: RetellSignedRequestInput) {
+    const verificationKey = await ensureVerificationKey();
 
-    if (!signature) {
+    if (!input.signature) {
       throw new AppError(
         "Missing Retell signature.",
         401,
@@ -170,7 +182,11 @@ export function createRetellService(options: RetellServiceOptions) {
       );
     }
 
-    const isValid = await verify(JSON.stringify(body), webhookSecret, signature);
+    const isValid = await verify(
+      input.rawBody,
+      verificationKey,
+      input.signature
+    );
 
     if (!isValid) {
       throw new AppError(
@@ -241,12 +257,21 @@ export function createRetellService(options: RetellServiceOptions) {
     toolName: string,
     error: AppError
   ): RetellToolFailure {
+    const validation = getCanonicalRetellRepair(error.details);
+
     return {
       ok: false,
       tool: toolName,
       error: {
         code: error.code,
-        message: getCallerSafeFailureMessage(toolName, error)
+        message:
+          error.code === "VALIDATION_ERROR"
+            ? validation.callerMessage ?? getCallerSafeFailureMessage(toolName, error)
+            : getCallerSafeFailureMessage(toolName, error),
+        ...(validation.repairStep ? { repairStep: validation.repairStep } : {}),
+        ...(validation.fieldErrors
+          ? { fieldErrors: validation.fieldErrors }
+          : {})
       }
     };
   }
@@ -259,8 +284,9 @@ export function createRetellService(options: RetellServiceOptions) {
     async handleWebhook(input: {
       signature: string | undefined;
       body: unknown;
+      rawBody: string;
     }): Promise<RetellWebhookReceipt> {
-      await verifySignature(input.signature, input.body);
+      await verifySignature(input);
 
       const payload = parseRetellWebhookPayload(input.body);
       const officeContext = payload.call
@@ -296,8 +322,9 @@ export function createRetellService(options: RetellServiceOptions) {
     async executeTool(input: {
       signature: string | undefined;
       body: unknown;
+      rawBody: string;
     }): Promise<RetellToolResult> {
-      await verifySignature(input.signature, input.body);
+      await verifySignature(input);
 
       const request = parseRetellToolRequest(input.body);
       const officeContext = await resolveOfficeContext(request.call);

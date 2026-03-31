@@ -1,10 +1,18 @@
 import { z } from "zod";
 
 import { AppError } from "../../lib/errors.js";
-import type { SearchListingsQuery } from "../listings/types.js";
+import type {
+  RepairStep,
+  VoiceFieldError
+} from "./repair-types.js";
+import { canonicalRepairSteps as canonicalRepairStepValues } from "./repair-types.js";
 import {
-  customerPhoneSchema,
-  preferredTimeWindowSchema,
+  toListingReferenceValidationDetails,
+  toListingSearchValidationDetails,
+  type SearchListingsQuery
+} from "../listings/types.js";
+import {
+  parseCreateShowingRequestBody,
   preferredTimeWindowValues,
   type CreateShowingRequestBody
 } from "../showing-requests/types.js";
@@ -31,18 +39,6 @@ const trimmedOptionalString = z.preprocess((value) => {
 
   return value;
 }, z.string().trim().min(1).optional());
-
-const optionalEmail = z.preprocess((value) => {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-
-  if (typeof value === "string" && value.trim() === "") {
-    return undefined;
-  }
-
-  return value;
-}, z.email().optional());
 
 // Keep Retell's numeric placeholder tolerance scoped to the noisy
 // search_listings provider boundary instead of making it a generic rule.
@@ -144,20 +140,6 @@ const getListingByReferenceToolArgsSchema = z
   })
   .strict();
 
-const createShowingRequestToolArgsSchema = z
-  .object({
-    listingId: z.string().uuid(),
-    customerName: z.string().trim().min(1),
-    customerPhone: customerPhoneSchema,
-    customerEmail: optionalEmail,
-    preferredTimeWindow: preferredTimeWindowSchema.optional(),
-    preferredDatetime: z
-      .string()
-      .datetime({ offset: true })
-      .transform((value) => new Date(value))
-  })
-  .strict();
-
 const retellToolRequestSchema = z
   .object({
     name: z.string().trim().min(1),
@@ -166,6 +148,52 @@ const retellToolRequestSchema = z
   })
   .passthrough();
 
+const retellRepairStepSchema = z.union([
+  z.enum(canonicalRepairStepValues),
+  z.literal("unknown")
+]);
+
+const retellToolFieldErrorSchema = z
+  .object({
+    field: retellRepairStepSchema,
+    message: z.string().trim().min(1)
+  })
+  .strict();
+
+const retellToolRepairMetadataSchema = z
+  .object({
+    repairStep: retellRepairStepSchema.optional(),
+    fieldErrors: z.array(retellToolFieldErrorSchema).min(1).optional(),
+    callerMessage: trimmedOptionalString
+  })
+  .passthrough();
+
+const retellToolFailureErrorSchema = retellToolRepairMetadataSchema.extend({
+  code: z.string().trim().min(1),
+  message: z.string().trim().min(1)
+});
+
+const retellToolFailureSchema = z
+  .object({
+    ok: z.literal(false),
+    tool: z.string().trim().min(1),
+    error: retellToolFailureErrorSchema
+  })
+  .passthrough();
+
+const retellToolSuccessSchema = z
+  .object({
+    ok: z.literal(true),
+    tool: z.string().trim().min(1),
+    data: z.unknown()
+  })
+  .passthrough();
+
+const retellToolResultSchema = z.discriminatedUnion("ok", [
+  retellToolSuccessSchema,
+  retellToolFailureSchema
+]);
+
 export type RetellCall = z.infer<typeof retellCallSchema>;
 export type RetellWebhookPayload = z.infer<typeof retellWebhookSchema>;
 export type RetellToolRequest = z.infer<typeof retellToolRequestSchema>;
@@ -173,9 +201,7 @@ export type SearchListingsToolArgs = z.output<typeof searchListingsToolArgsSchem
 export type GetListingByReferenceToolArgs = z.infer<
   typeof getListingByReferenceToolArgsSchema
 >;
-export type CreateShowingRequestToolArgs = z.output<
-  typeof createShowingRequestToolArgsSchema
->;
+export type CreateShowingRequestToolArgs = CreateShowingRequestBody;
 
 export interface RetellWebhookReceipt {
   received: true;
@@ -193,15 +219,24 @@ export interface RetellToolSuccess<TData> {
 export interface RetellToolFailure {
   ok: false;
   tool: string;
-  error: {
-    code: string;
-    message: string;
-  };
+  error: RetellToolFailureError;
 }
 
 export type RetellToolResult<TData = unknown> =
   | RetellToolSuccess<TData>
   | RetellToolFailure;
+
+export interface RetellToolRepairMetadata {
+  repairStep?: RepairStep | "unknown" | undefined;
+  fieldErrors?: VoiceFieldError[] | undefined;
+  callerMessage?: string | undefined;
+  [key: string]: unknown;
+}
+
+export interface RetellToolFailureError extends RetellToolRepairMetadata {
+  code: string;
+  message: string;
+}
 
 export const retellToolContracts: RetellToolContract[] = [
   {
@@ -275,7 +310,7 @@ export const retellToolContracts: RetellToolContract[] = [
   {
     name: "create_showing_request",
     description:
-      "Create a showing request for an office-scoped listing after collecting the minimum required customer details. A usable caller name is enough; do not require surname. The listingId must be the verified backend UUID returned by get_listing_by_reference or another backend tool result, never a raw spoken reference code. Use the confirmed callback number, never a literal placeholder such as {{user_number}}, and only include email if the caller volunteered it. When repeating a callback number to the caller, say each digit in short blocks and keep the wording fully Turkish. Do not expose tool names, argument keys, or schema words to the caller.",
+      "Create a showing request for an office-scoped listing after collecting the minimum required customer details. A usable caller name is enough; do not require surname. The listingId must be the verified backend UUID returned by get_listing_by_reference or another backend tool result, never a raw spoken reference code. Use the confirmed callback number, never a literal placeholder such as {{user_number}}, and only include email if the caller volunteered it. If the caller dictated a new callback number, confirm it with a short read-back before calling this tool. When repeating a callback number to the caller, say each digit in short blocks and keep the wording fully Turkish. Do not expose tool names, argument keys, or schema words to the caller.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -300,7 +335,7 @@ export const retellToolContracts: RetellToolContract[] = [
         customerPhone: {
           type: "string",
           description:
-            "Confirmed callback phone number. On phone_call, use the current caller number after brief confirmation. On web_call, use the callback number the caller provided. Never pass a literal placeholder such as {{user_number}}."
+            "Confirmed callback phone number. On phone_call, use the current caller number only after brief confirmation. If the caller dictated a new number, read it back briefly and confirm it before calling this tool. On web_call, use the callback number the caller provided only after that spoken-number confirmation step. Never pass a literal placeholder such as {{user_number}}."
         },
         customerEmail: {
           type: "string",
@@ -353,32 +388,75 @@ export function parseRetellToolRequest(input: unknown): RetellToolRequest {
   );
 }
 
+export function parseRetellToolFailure(input: unknown): RetellToolFailure {
+  return parseWithSchema(
+    retellToolFailureSchema,
+    input,
+    "Invalid Retell tool failure payload."
+  );
+}
+
+export function parseRetellToolResult(input: unknown): RetellToolResult {
+  return parseWithSchema(
+    retellToolResultSchema,
+    input,
+    "Invalid Retell tool result payload."
+  );
+}
+
 export function parseSearchListingsToolArgs(
   input: unknown
 ): SearchListingsQuery {
-  return parseWithSchema(
-    searchListingsToolArgsSchema,
-    input,
-    "Invalid search_listings arguments."
-  );
+  const result = searchListingsToolArgsSchema.safeParse(input);
+
+  if (!result.success) {
+    throw new AppError(
+      "Invalid search_listings arguments.",
+      400,
+      "VALIDATION_ERROR",
+      toListingSearchValidationDetails(result.error)
+    );
+  }
+
+  return result.data;
 }
 
 export function parseGetListingByReferenceToolArgs(
   input: unknown
 ): GetListingByReferenceToolArgs {
-  return parseWithSchema(
-    getListingByReferenceToolArgsSchema,
-    input,
-    "Invalid get_listing_by_reference arguments."
-  );
+  const result = getListingByReferenceToolArgsSchema.safeParse(input);
+
+  if (!result.success) {
+    throw new AppError(
+      "Invalid get_listing_by_reference arguments.",
+      400,
+      "VALIDATION_ERROR",
+      toListingReferenceValidationDetails(result.error)
+    );
+  }
+
+  return result.data;
 }
 
 export function parseCreateShowingRequestToolArgs(
   input: unknown
 ): CreateShowingRequestBody {
-  return parseWithSchema(
-    createShowingRequestToolArgsSchema,
-    input,
-    "Invalid create_showing_request arguments."
-  );
+  try {
+    return parseCreateShowingRequestBody(input);
+  } catch (error) {
+    if (
+      error instanceof AppError &&
+      error.code === "VALIDATION_ERROR" &&
+      error.statusCode === 400
+    ) {
+      throw new AppError(
+        "Invalid create_showing_request arguments.",
+        400,
+        "VALIDATION_ERROR",
+        error.details
+      );
+    }
+
+    throw error;
+  }
 }

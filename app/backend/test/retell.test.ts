@@ -4,6 +4,7 @@ import test from "node:test";
 import { sign } from "retell-sdk";
 
 import { AppError } from "../src/lib/errors.js";
+import { createIntegrationsService } from "../src/modules/integrations/service.js";
 import type { ListingsService } from "../src/modules/listings/service.js";
 import type {
   ListingDetail,
@@ -16,17 +17,27 @@ import type {
   RetellRepository,
   UpsertCallLogInput
 } from "../src/modules/retell/repository.js";
+import {
+  getRepairStepCallerMessage,
+  toCanonicalRepairStep,
+  toCanonicalVoiceFieldErrors
+} from "../src/modules/retell/repair-messages.js";
 import { createRetellService } from "../src/modules/retell/service.js";
 import { retellToolContracts } from "../src/modules/retell/types.js";
-import type { ShowingRequestsService } from "../src/modules/showing-requests/service.js";
+import {
+  createShowingRequestsService,
+  type ShowingRequestsService
+} from "../src/modules/showing-requests/service.js";
 import type { ShowingRequestRecord } from "../src/modules/showing-requests/types.js";
 
 process.env.DATABASE_URL ??= "postgresql://postgres:postgres@localhost:5432/ai_ses";
+process.env.RETELL_API_KEY ??= "retell-api-key-test";
 process.env.RETELL_WEBHOOK_SECRET ??= "retell-test-secret";
 
 const { createApp } = await import("../src/app.js");
 
 const RETELL_SECRET = "retell-test-secret";
+const RETELL_API_KEY = "retell-api-key-test";
 const TENANT_1_ID = "aaaaaaaa-1111-4111-8111-111111111111";
 const OFFICE_1_ID = "11111111-1111-4111-8111-111111111111";
 const OFFICE_2_ID = "22222222-2222-4222-8222-222222222222";
@@ -668,6 +679,124 @@ test("POST /v1/retell/tools includes spoken fields on verified reference lookup 
   await app.close();
 });
 
+test("POST /v1/retell/tools returns reference-code repair details for blank get_listing_by_reference input", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "get_listing_by_reference",
+    args: {
+      referenceCode: "   "
+    },
+    call: {
+      call_id: "call_reference_blank_code",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, false);
+  assert.equal(response.json().tool, "get_listing_by_reference");
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(response.json().error.repairStep, "referenceCode");
+  assert.match(
+    response.json().error.message,
+    /Ilan kodunu tam haliyle bir kez daha almam gerekiyor/i
+  );
+  assert.deepEqual(response.json().error.fieldErrors, [
+    {
+      field: "referenceCode",
+      message: "Too small: expected string to have >=1 characters"
+    }
+  ]);
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools returns field-specific search repair details for contradictory price filters", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "search_listings",
+    args: {
+      district: "Kadikoy",
+      minPrice: 900000,
+      maxPrice: 100000
+    },
+    call: {
+      call_id: "call_search_contradictory_price_range",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, false);
+  assert.equal(response.json().tool, "search_listings");
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(response.json().error.repairStep, "minPrice");
+  assert.match(
+    response.json().error.message,
+    /Arama kriterlerindeki fiyat, oda ya da metrekare bilgisini yeniden netlestirmem gerekiyor/i
+  );
+  assert.deepEqual(response.json().error.fieldErrors, [
+    {
+      field: "minPrice",
+      message: "minPrice cannot be greater than maxPrice."
+    }
+  ]);
+
+  await app.close();
+});
+
 test("POST /v1/retell/tools rejects invalid signatures", async () => {
   const listingsService = createFakeListingsService();
   const showingRequestsService = createFakeShowingRequestsService().service;
@@ -705,6 +834,218 @@ test("POST /v1/retell/tools rejects invalid signatures", async () => {
 
   assert.equal(response.statusCode, 401);
   assert.equal(response.json().error.code, "RETELL_SIGNATURE_INVALID");
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools uses RETELL_API_KEY before a stale RETELL_WEBHOOK_SECRET", async () => {
+  const originalApiKey = process.env.RETELL_API_KEY;
+  const originalWebhookSecret = process.env.RETELL_WEBHOOK_SECRET;
+
+  process.env.RETELL_API_KEY = RETELL_API_KEY;
+  process.env.RETELL_WEBHOOK_SECRET = "retell-stale-secret";
+
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellService = createRetellService({
+    repository: createFakeRetellRepository().repository,
+    listingsService,
+    showingRequestsService
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "get_listing_by_reference",
+    args: {
+      referenceCode: "REF-001"
+    },
+    call: {
+      call_id: "call_reference_api_key_precedence",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/retell/tools",
+      headers: {
+        "x-retell-signature": await sign(
+          JSON.stringify(payload),
+          RETELL_API_KEY
+        )
+      },
+      payload
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().ok, true);
+    assert.equal(response.json().tool, "get_listing_by_reference");
+  } finally {
+    process.env.RETELL_API_KEY = originalApiKey;
+    process.env.RETELL_WEBHOOK_SECRET = originalWebhookSecret;
+    await app.close();
+  }
+});
+
+test("POST /v1/retell/tools keeps explicit webhookSecret override ahead of RETELL_API_KEY", async () => {
+  const originalApiKey = process.env.RETELL_API_KEY;
+  const originalWebhookSecret = process.env.RETELL_WEBHOOK_SECRET;
+
+  process.env.RETELL_API_KEY = RETELL_API_KEY;
+  process.env.RETELL_WEBHOOK_SECRET = "retell-stale-secret";
+
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellService = createRetellService({
+    repository: createFakeRetellRepository().repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "get_listing_by_reference",
+    args: {
+      referenceCode: "REF-001"
+    },
+    call: {
+      call_id: "call_reference_explicit_secret_precedence",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/retell/tools",
+      headers: {
+        "x-retell-signature": await sign(
+          JSON.stringify(payload),
+          RETELL_SECRET
+        )
+      },
+      payload
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().ok, true);
+    assert.equal(response.json().tool, "get_listing_by_reference");
+  } finally {
+    process.env.RETELL_API_KEY = originalApiKey;
+    process.env.RETELL_WEBHOOK_SECRET = originalWebhookSecret;
+    await app.close();
+  }
+});
+
+test("POST /v1/retell/tools verifies against the raw request body string", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellService = createRetellService({
+    repository: createFakeRetellRepository().repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const rawPayload = `{
+  "call": {
+    "metadata": {
+      "office_id": "${OFFICE_1_ID}"
+    },
+    "call_id": "call_reference_raw_body"
+  },
+  "args": {
+    "referenceCode": "REF-001"
+  },
+  "name": "get_listing_by_reference"
+}`;
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "content-type": "application/json",
+      "x-retell-signature": await sign(rawPayload, RETELL_SECRET)
+    },
+    payload: rawPayload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(response.json().tool, "get_listing_by_reference");
+
+  await app.close();
+});
+
+test("POST /v1/webhooks/retell verifies against the raw request body string", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const rawPayload = `{
+  "call": {
+    "call_status": "ended",
+    "direction": "inbound",
+    "to_number": "+905550000001",
+    "from_number": "+905551234567",
+    "call_analysis": {
+      "call_summary": "Customer asked for a showing."
+    },
+    "end_timestamp": 1769308200000,
+    "start_timestamp": 1769306400000,
+    "call_id": "call_webhook_raw_body"
+  },
+  "event": "call_ended"
+}`;
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/webhooks/retell",
+    headers: {
+      "content-type": "application/json",
+      "x-retell-signature": await sign(rawPayload, RETELL_SECRET)
+    },
+    payload: rawPayload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().data.received, true);
+  assert.equal(response.json().data.officeId, OFFICE_1_ID);
+  assert.equal(retellRepository.callLogs.size, 1);
 
   await app.close();
 });
@@ -759,6 +1100,203 @@ test("POST /v1/retell/tools accepts blank optional customerEmail for create_show
   assert.equal(createdRequests.length, 1);
   assert.equal(createdRequests[0]?.customerEmail, null);
   assert.equal(createdRequests[0]?.preferredTimeWindow, "afternoon");
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools normalizes spoken Turkish mobile numbers before create_showing_request", async () => {
+  const listingsService = createFakeListingsService();
+  const { service: showingRequestsService, createdRequests } =
+    createFakeShowingRequestsService();
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "create_showing_request",
+    args: {
+      listingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      customerName: "Umut",
+      customerPhone: "5056924071",
+      preferredDatetime: "2026-03-28T18:30:00.000Z"
+    },
+    call: {
+      call_id: "call_showing_spoken_phone_normalized",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(createdRequests.length, 1);
+  assert.equal(createdRequests[0]?.customerPhone, "+905056924071");
+  assert.equal(
+    response.json().data.showingRequest.customerPhone,
+    "+905056924071"
+  );
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools keeps create_showing_request successful when booking dispatch fails after persistence", async () => {
+  const listingsService = createFakeListingsService();
+  const bookingDispatchAudits: Array<{
+    officeId?: string | null;
+    action: string;
+    payload?: unknown;
+  }> = [];
+  const showingRequestsService = createShowingRequestsService(
+    {
+      async findOfficeListing(officeId, listingId) {
+        const listing = LISTING_FIXTURES.find(
+          (entry) => entry.officeId === officeId && entry.id === listingId
+        );
+
+        return listing ? { id: listing.id } : null;
+      },
+      async create(input) {
+        return {
+          id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+          officeId: input.officeId,
+          listingId: input.listingId,
+          customerName: input.customerName,
+          customerPhone: input.customerPhone,
+          customerEmail: input.customerEmail ?? null,
+          preferredTimeWindow: input.preferredTimeWindow ?? null,
+          preferredDatetime: input.preferredDatetime,
+          status: "pending",
+          createdAt: new Date("2026-03-29T10:15:00.000Z")
+        };
+      }
+    },
+    {
+      integrationsService: createIntegrationsService({
+        repository: {
+          async findOfficeContextById(officeId) {
+            if (officeId === OFFICE_1_ID) {
+              return {
+                officeId,
+                tenantId: TENANT_1_ID,
+                officeName: "Office 1",
+                officeTimezone: "Europe/Istanbul"
+              };
+            }
+
+            return null;
+          },
+          async findActiveConnectionByKind() {
+            return [];
+          },
+          async findConnectionById() {
+            return null;
+          },
+          async findShowingRequestById() {
+            return null;
+          },
+          async updateShowingRequestStatus() {
+            throw new Error("updateShowingRequestStatus should not be called");
+          },
+          async findCallLogById() {
+            return null;
+          },
+          async findAuditEventByActor() {
+            return null;
+          },
+          async createAuditEvent(input) {
+            bookingDispatchAudits.push({
+              officeId: input.officeId ?? null,
+              action: input.action,
+              payload: input.payload
+            });
+          },
+          async createAuditEventIfAbsent() {
+            return null;
+          },
+          async claimBookingCallbackRunAndUpdateShowingRequest() {
+            throw new Error(
+              "claimBookingCallbackRunAndUpdateShowingRequest should not be called"
+            );
+          }
+        }
+      })
+    }
+  );
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "create_showing_request",
+    args: {
+      listingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      customerName: "Ada Yilmaz",
+      customerPhone: "+905551112233",
+      preferredTimeWindow: "afternoon",
+      preferredDatetime: "2026-03-28T18:30:00.000Z"
+    },
+    call: {
+      call_id: "call_showing_dispatch_failure_nonfatal",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(response.json().data.showingRequest.id, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1");
+  assert.deepEqual(bookingDispatchAudits, [
+    {
+      officeId: OFFICE_1_ID,
+      action: "booking_dispatch_failed",
+      payload: {
+        sourceAction: "showing_request_created",
+        showingRequestId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1",
+        errorCode: "BOOKING_WORKFLOW_DISPATCH_UNAVAILABLE",
+        error: "Booking workflow dispatch is unavailable."
+      }
+    }
+  ]);
 
   await app.close();
 });
@@ -867,6 +1405,194 @@ test("POST /v1/retell/tools rejects literal {{user_number}} callback placeholder
   assert.equal(response.json().ok, false);
   assert.equal(response.json().tool, "create_showing_request");
   assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(response.json().error.repairStep, "customerPhone");
+  assert.match(
+    response.json().error.message,
+    /Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor/i
+  );
+  assert.deepEqual(response.json().error.fieldErrors, [
+    {
+      field: "customerPhone",
+      message: "Customer phone must not contain unresolved template placeholders."
+    }
+  ]);
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools rejects incomplete spoken Turkish mobile numbers", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService = createFakeShowingRequestsService().service;
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "create_showing_request",
+    args: {
+      listingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      customerName: "Umut",
+      customerPhone: "505692471",
+      preferredDatetime: "2026-03-29T12:00:00.000Z"
+    },
+    call: {
+      call_id: "call_showing_incomplete_spoken_phone",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, false);
+  assert.equal(response.json().tool, "create_showing_request");
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(response.json().error.repairStep, "customerPhone");
+  assert.match(
+    response.json().error.message,
+    /Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor/i
+  );
+  assert.deepEqual(response.json().error.fieldErrors, [
+    {
+      field: "customerPhone",
+      message:
+        "Customer phone must be a valid Turkish mobile number in spoken, local, or E.164 form."
+    }
+  ]);
+
+  await app.close();
+});
+
+test("repair message helpers keep Retell-facing repair mapping canonical", () => {
+  assert.equal(
+    getRepairStepCallerMessage("referenceCode"),
+    "Ilan kodunu tam haliyle bir kez daha almam gerekiyor."
+  );
+  assert.equal(getRepairStepCallerMessage("unknown"), undefined);
+  assert.equal(toCanonicalRepairStep("customerPhone"), "customerPhone");
+  assert.equal(toCanonicalRepairStep("district"), undefined);
+  assert.deepEqual(
+    toCanonicalVoiceFieldErrors([
+      {
+        field: "customerPhone",
+        message:
+          "Customer phone must be a valid Turkish mobile number in spoken, local, or E.164 form."
+      },
+      {
+        field: "district",
+        message: "Should be ignored because it is not a canonical repair field."
+      }
+    ]),
+    [
+      {
+        field: "customerPhone",
+        message:
+          "Customer phone must be a valid Turkish mobile number in spoken, local, or E.164 form."
+      }
+    ]
+  );
+});
+
+test("Retell service does not choose a repair field from fieldErrors when repairStep is unknown", async () => {
+  const listingsService = createFakeListingsService();
+  const showingRequestsService: ShowingRequestsService = {
+    async createShowingRequest() {
+      throw new AppError(
+        "Invalid input.",
+        400,
+        "VALIDATION_ERROR",
+        {
+          code: "VALIDATION_ERROR",
+          repairStep: "unknown",
+          fieldErrors: [
+            {
+              field: "customerPhone",
+              message:
+                "Customer phone must be a valid Turkish mobile number in spoken, local, or E.164 form."
+            }
+          ]
+        }
+      );
+    }
+  };
+  const retellRepository = createFakeRetellRepository();
+  const retellService = createRetellService({
+    repository: retellRepository.repository,
+    listingsService,
+    showingRequestsService,
+    webhookSecret: RETELL_SECRET
+  });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    showingRequestsService,
+    retellService
+  });
+  const payload = {
+    name: "create_showing_request",
+    args: {
+      listingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      customerName: "Umut",
+      customerPhone: "+905551112233",
+      preferredDatetime: "2026-03-29T12:00:00.000Z"
+    },
+    call: {
+      call_id: "call_showing_unknown_repair_step",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await sign(JSON.stringify(payload), RETELL_SECRET)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, false);
+  assert.equal(response.json().tool, "create_showing_request");
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(response.json().error.repairStep, "unknown");
+  assert.match(
+    response.json().error.message,
+    /Talebi .* yeniden teyit etmem gerekiyor/i
+  );
+  assert.doesNotMatch(
+    response.json().error.message,
+    /Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor/i
+  );
+  assert.deepEqual(response.json().error.fieldErrors, [
+    {
+      field: "customerPhone",
+      message:
+        "Customer phone must be a valid Turkish mobile number in spoken, local, or E.164 form."
+    }
+  ]);
 
   await app.close();
 });
@@ -946,6 +1672,7 @@ test("create_showing_request contract does not imply surname is required", () =>
   assert.match(tool?.description ?? "", /verified backend UUID/i);
   assert.match(tool?.description ?? "", /never a raw spoken reference code/i);
   assert.match(tool?.description ?? "", /never a literal placeholder/i);
+  assert.match(tool?.description ?? "", /confirm it with a short read-back/i);
   assert.match(listingIdProperty.description ?? "", /verified backend listing UUID/i);
   assert.match(listingIdProperty.description ?? "", /never pass a raw reference code/i);
   assert.match(customerNameProperty.description ?? "", /single given name/i);
@@ -953,6 +1680,7 @@ test("create_showing_request contract does not imply surname is required", () =>
   assert.match(customerPhoneProperty.description ?? "", /confirmed callback/i);
   assert.match(customerPhoneProperty.description ?? "", /phone_call/i);
   assert.match(customerPhoneProperty.description ?? "", /web_call/i);
+  assert.match(customerPhoneProperty.description ?? "", /read it back briefly and confirm it/i);
   assert.match(customerPhoneProperty.description ?? "", /never pass a literal placeholder/i);
 });
 

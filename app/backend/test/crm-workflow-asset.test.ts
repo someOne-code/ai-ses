@@ -25,6 +25,9 @@ async function readWorkflow() {
       name: string;
       nodes: WorkflowNode[];
       connections: Record<string, unknown>;
+      id?: string;
+      versionId?: string;
+      meta?: unknown;
     }
   };
 }
@@ -35,6 +38,14 @@ test("crm workflow asset is project-owned and parseable", async () => {
   assert.equal(workflow.name, "ai-ses - CRM Sync");
   assert.ok(Array.isArray(workflow.nodes));
   assert.ok(workflow.nodes.length >= 10);
+});
+
+test("crm workflow asset stays import-safe for local n8n", async () => {
+  const { workflow } = await readWorkflow();
+
+  assert.equal(workflow.id, undefined);
+  assert.equal(workflow.versionId, undefined);
+  assert.equal(workflow.meta, undefined);
 });
 
 test("crm workflow asset uses only the intended standard node patterns", async () => {

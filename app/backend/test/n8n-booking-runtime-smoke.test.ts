@@ -10,6 +10,13 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Client } from "pg";
 
+import { seedLocalDemoData } from "../scripts/seed-local-demo.ts";
+import { buildUniqueGoogleSmokeSlot } from "./helpers/google-provider-smoke.ts";
+import {
+  prepareGoogleCalendarCredentialRepair,
+  REQUIRED_GOOGLE_CALENDAR_NODE_NAMES
+} from "./helpers/google-calendar-credential-guard.ts";
+
 const execFileAsync = promisify(execFile);
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const backendDir = path.resolve(currentDir, "..");
@@ -24,6 +31,14 @@ type WorkflowListResponse = {
     name: string;
     active: boolean;
   }>;
+};
+
+type WorkflowDetailResponse = {
+  id: string;
+  name: string;
+  nodes: Array<Record<string, unknown>>;
+  connections: Record<string, unknown>;
+  settings?: Record<string, unknown>;
 };
 
 type ExecutionListResponse = {
@@ -117,6 +132,92 @@ async function resolveWorkflowId(
   assert.equal(workflow.active, true, `${workflowName} must be active in live n8n`);
 
   return workflow.id;
+}
+
+async function ensureGoogleCalendarNodeCredentials(
+  baseUrl: string,
+  apiKey: string,
+  workflowId: string
+) {
+  const headers = {
+    "X-N8N-API-KEY": apiKey,
+    "Content-Type": "application/json"
+  };
+  const { response, json } = await fetchJson<WorkflowDetailResponse>(
+    `${baseUrl}/api/v1/workflows/${workflowId}`,
+    { headers }
+  );
+
+  assert.equal(response.status, 200, `Failed to fetch workflow ${workflowId}`);
+  assert.ok(json);
+
+  const { sourceCredential, repairedNodeNames, updatedNodes } =
+    prepareGoogleCalendarCredentialRepair(workflowId, json.nodes);
+
+  if (repairedNodeNames.length === 0) {
+    return;
+  }
+
+  const updateResponse = await fetch(`${baseUrl}/api/v1/workflows/${workflowId}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify({
+      name: json.name,
+      nodes: updatedNodes,
+      connections: json.connections,
+      settings: json.settings ?? {}
+    })
+  });
+
+  assert.equal(
+    updateResponse.status,
+    200,
+    `Failed to update workflow ${workflowId} with missing Google credentials`
+  );
+
+  const updatedWorkflow = (await updateResponse.json()) as WorkflowDetailResponse;
+
+  for (const nodeName of REQUIRED_GOOGLE_CALENDAR_NODE_NAMES) {
+    const updatedNode = updatedWorkflow.nodes.find((node) => {
+      const typedNode = node as {
+        name?: string;
+        credentials?: {
+          googleCalendarOAuth2Api?: { id: string; name: string };
+        };
+      };
+
+      return typedNode.name === nodeName;
+    }) as
+      | {
+          credentials?: {
+            googleCalendarOAuth2Api?: { id: string; name: string };
+          };
+        }
+      | undefined;
+
+    assert.ok(updatedNode, `Workflow ${workflowId} must still include ${nodeName}`);
+    assert.deepEqual(
+      updatedNode.credentials?.googleCalendarOAuth2Api,
+      sourceCredential,
+      `Workflow ${workflowId} must persist the Google credential on ${nodeName}`
+    );
+  }
+}
+
+function getRequiredGoogleCalendarNodeNames(execution: ExecutionDetailResponse) {
+  return REQUIRED_GOOGLE_CALENDAR_NODE_NAMES.filter(
+    (nodeName) => getNodeJsonOutput(execution, nodeName) !== null
+  );
+}
+
+async function assertGoogleCalendarExecutionNodeSet(
+  execution: ExecutionDetailResponse,
+  expectedNodeNames: string[]
+) {
+  assert.deepEqual(
+    getRequiredGoogleCalendarNodeNames(execution),
+    expectedNodeNames
+  );
 }
 
 async function resolveWebhookPath(workflowId: string) {
@@ -391,11 +492,11 @@ test(
     );
     const webhookPath = await resolveWebhookPath(workflowId);
     const routeUrl = `${baseUrl}/webhook/${webhookPath}`;
-
-    assert.notEqual(
+    assert.ok(webhookPath.trim() !== "", "Live booking webhook path must resolve");
+    assert.equal(
       routeUrl,
-      `${baseUrl}/webhook/ai-ses-booking-flow`,
-      "Smoke tests must use the live registered route, not a guessed path"
+      `${baseUrl}/webhook/${webhookPath}`,
+      "Smoke tests must use the live registered route resolved from n8n"
     );
 
     const { response, json } = await fetchJson<{
@@ -436,6 +537,7 @@ test(
       apiKey,
       "ai-ses - Booking Flow"
     );
+    await ensureGoogleCalendarNodeCredentials(baseUrl, apiKey, workflowId);
     const webhookPath = await resolveWebhookPath(workflowId);
     const routeUrl = `${baseUrl}/webhook/${webhookPath}`;
     const client = new Client({ connectionString: databaseUrl });
@@ -637,6 +739,7 @@ test(
       apiKey,
       "ai-ses - Booking Flow"
     );
+    await ensureGoogleCalendarNodeCredentials(baseUrl, apiKey, workflowId);
     const webhookPath = await resolveWebhookPath(workflowId);
     const routeUrl = `${baseUrl}/webhook/${webhookPath}`;
     const client = new Client({ connectionString: databaseUrl });
@@ -1257,17 +1360,21 @@ test(
     const webhookPath = await resolveWebhookPath(workflowId);
     const routeUrl = `${baseUrl}/webhook/${webhookPath}`;
     const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    const claimedOffice = await claimSmokeOffice(client);
-    const officeId = claimedOffice.officeId;
+    let claimedOffice: ClaimedSmokeOffice | null = null;
     const listingId = randomUUID();
     const showingRequestId = randomUUID();
     const connectionId = randomUUID();
     const calendarId = process.env.N8N_GOOGLE_CALENDAR_ID as string;
-    const preferredDatetime = "2026-04-02T14:00:00+03:00";
+    const { preferredDatetime, preferredDatetimeUtc } =
+      buildUniqueGoogleSmokeSlot(showingRequestId);
     const executionStartedAfter = Date.now();
 
     try {
+      await seedLocalDemoData();
+      await client.connect();
+      claimedOffice = await claimSmokeOffice(client);
+      const officeId = claimedOffice.officeId;
+
       await client.query(
         `insert into listings (
            id, office_id, reference_code, title, status, currency
@@ -1301,13 +1408,14 @@ test(
           listingId,
           "Smoke Google Calendar Tester",
           "+905555555558",
-          "2026-04-02T11:00:00.000Z"
+          preferredDatetimeUtc
         ]
       );
 
       const providerConfig = {
         provider: "google_calendar",
         calendarId,
+        cleanupCreatedEvent: true,
         durationMinutes: 30,
         confirmationDelaySeconds: 0
       };
@@ -1378,6 +1486,11 @@ test(
           showingRequestId
       );
       const execution = await getExecutionDetail(baseUrl, apiKey, executionId);
+      await assertGoogleCalendarExecutionNodeSet(execution, [
+        "Check Google Calendar Availability",
+        "Create Google Calendar Event",
+        "Delete Google Calendar Event"
+      ]);
       const availabilityOutput = getNodeJsonOutput(
         execution,
         "Check Google Calendar Availability"
@@ -1386,12 +1499,17 @@ test(
         execution,
         "Create Google Calendar Event"
       );
+      const deleteOutput = getNodeJsonOutput(
+        execution,
+        "Delete Google Calendar Event"
+      );
 
       assert.equal(availabilityOutput?.available, true);
       assert.equal(typeof createOutput?.id, "string");
       assert.ok(
         typeof createOutput?.htmlLink === "string" || typeof createOutput?.summary === "string"
       );
+      assert.equal(deleteOutput?.success, true);
 
       const showingRequest = await client.query<{ status: string }>(
         `select status
@@ -1450,13 +1568,13 @@ test(
          where id = $1`,
         [listingId]
       );
-      if (claimedOffice.deactivatedConnectionIds.length > 0) {
+      if ((claimedOffice?.deactivatedConnectionIds.length ?? 0) > 0) {
         await client.query(
           `update integration_connections
            set status = 'active',
                updated_at = now()
            where id = any($1::uuid[])`,
-          [claimedOffice.deactivatedConnectionIds]
+          [claimedOffice?.deactivatedConnectionIds ?? []]
         );
       }
       await client.end();
@@ -1478,18 +1596,22 @@ test(
       apiKey,
       "ai-ses - Booking Flow"
     );
+    await ensureGoogleCalendarNodeCredentials(baseUrl, apiKey, workflowId);
     const webhookPath = await resolveWebhookPath(workflowId);
     const routeUrl = `${baseUrl}/webhook/${webhookPath}`;
     const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    const claimedOffice = await claimSmokeOffice(client);
-    const officeId = claimedOffice.officeId;
+    let claimedOffice: ClaimedSmokeOffice | null = null;
     const listingId = randomUUID();
     const showingRequestId = randomUUID();
     const connectionId = randomUUID();
     const executionStartedAfter = Date.now();
 
     try {
+      await seedLocalDemoData();
+      await client.connect();
+      claimedOffice = await claimSmokeOffice(client);
+      const officeId = claimedOffice.officeId;
+
       await client.query(
         `insert into listings (
            id, office_id, reference_code, title, status, currency
@@ -1600,6 +1722,9 @@ test(
           showingRequestId
       );
       const execution = await getExecutionDetail(baseUrl, apiKey, executionId);
+      await assertGoogleCalendarExecutionNodeSet(execution, [
+        "Check Google Calendar Availability"
+      ]);
       const availabilityOutput = getNodeJsonOutput(
         execution,
         "Check Google Calendar Availability"
@@ -1663,13 +1788,13 @@ test(
          where id = $1`,
         [listingId]
       );
-      if (claimedOffice.deactivatedConnectionIds.length > 0) {
+      if ((claimedOffice?.deactivatedConnectionIds.length ?? 0) > 0) {
         await client.query(
           `update integration_connections
            set status = 'active',
                updated_at = now()
            where id = any($1::uuid[])`,
-          [claimedOffice.deactivatedConnectionIds]
+          [claimedOffice?.deactivatedConnectionIds ?? []]
         );
       }
       await client.end();

@@ -31,6 +31,34 @@ const REFERENCE_CODE_NORMALIZATION_SOURCE =
 const REFERENCE_CODE_NORMALIZATION_TARGET = "CGIOSUAIU";
 const SEARCH_NORMALIZATION_SOURCE = "çğıöşüâîû";
 const SEARCH_NORMALIZATION_TARGET = "cgiosuaiu";
+const SPOKEN_REFERENCE_DIGIT_MAP = new Map<string, string>([
+  ["SIFIR", "0"],
+  ["BIR", "1"],
+  ["IKI", "2"],
+  ["UC", "3"],
+  ["DORT", "4"],
+  ["BES", "5"],
+  ["ALTI", "6"],
+  ["YEDI", "7"],
+  ["SEKIZ", "8"],
+  ["DOKUZ", "9"]
+]);
+const SPOKEN_REFERENCE_TENS_MAP = new Map<string, number>([
+  ["ON", 10],
+  ["YIRMI", 20],
+  ["OTUZ", 30],
+  ["KIRK", 40],
+  ["ELLI", 50],
+  ["ALTMIS", 60],
+  ["YETMIS", 70],
+  ["SEKSEN", 80],
+  ["DOKSAN", 90]
+]);
+const SPOKEN_REFERENCE_SCALE_MAP = new Map<string, number>([
+  ["YUZ", 100],
+  ["BIN", 1_000],
+  ["MILYON", 1_000_000]
+]);
 
 const listingSearchSelection = {
   id: listings.id,
@@ -75,7 +103,40 @@ const listingDetailSelection = {
 };
 
 export function canonicalizeListingReferenceCode(value: string): string {
-  return value
+  const tokens = tokenizeListingReferenceCode(value);
+  const parts: string[] = [];
+
+  for (let index = 0; index < tokens.length; ) {
+    const token = tokens[index]!;
+
+    if (!isSpokenReferenceNumberToken(token)) {
+      parts.push(token);
+      index += 1;
+      continue;
+    }
+
+    let boundary = index + 1;
+
+    while (
+      boundary < tokens.length &&
+      isSpokenReferenceNumberToken(tokens[boundary]!)
+    ) {
+      boundary += 1;
+    }
+
+    const numericTokens = tokens.slice(index, boundary);
+    parts.push(
+      parseSpokenReferenceNumericTokens(numericTokens) ??
+        numericTokens.join("")
+    );
+    index = boundary;
+  }
+
+  return parts.join("");
+}
+
+function tokenizeListingReferenceCode(value: string): string[] {
+  const normalized = value
     .trim()
     .toUpperCase()
     .replace(/\u00c7/g, "C")
@@ -86,8 +147,173 @@ export function canonicalizeListingReferenceCode(value: string): string {
     .replace(/\u00dc/g, "U")
     .replace(/\u00c2/g, "A")
     .replace(/\u00ce/g, "I")
-    .replace(/\u00db/g, "U")
-    .replace(/[^A-Z0-9]+/g, "");
+    .replace(/\u00db/g, "U");
+
+  return normalized
+    .split(/[^A-Z0-9]+/g)
+    .filter((part) => part !== "");
+}
+
+function isSpokenReferenceNumberToken(token: string): boolean {
+  return (
+    /^\d+$/.test(token) ||
+    SPOKEN_REFERENCE_DIGIT_MAP.has(token) ||
+    SPOKEN_REFERENCE_TENS_MAP.has(token) ||
+    SPOKEN_REFERENCE_SCALE_MAP.has(token)
+  );
+}
+
+function collapseSegmentedNumericTokens(tokens: string[]): string[] {
+  const collapsed: string[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const nextToken = tokens[index + 1];
+
+    if (
+      /^\d{2}$/.test(token) &&
+      nextToken !== undefined &&
+      /^\d{2}$/.test(nextToken)
+    ) {
+      const currentValue = Number(token);
+      const nextValue = Number(nextToken);
+
+      if (
+        currentValue % 10 === 0 &&
+        nextValue >= currentValue &&
+        nextValue < currentValue + 10
+      ) {
+        continue;
+      }
+    }
+
+    collapsed.push(token);
+  }
+
+  return collapsed;
+}
+
+function parseSpokenReferenceNumericTokens(tokens: string[]): string | null {
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  if (tokens.every((token) => /^\d+$/.test(token))) {
+    return collapseSegmentedNumericTokens(tokens).join("");
+  }
+
+  if (tokens.some((token) => SPOKEN_REFERENCE_SCALE_MAP.has(token))) {
+    return parseSpokenReferenceCardinal(tokens);
+  }
+
+  const parts: string[] = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+
+    if (/^\d+$/.test(token)) {
+      parts.push(token);
+      continue;
+    }
+
+    const digit = SPOKEN_REFERENCE_DIGIT_MAP.get(token);
+
+    if (digit !== undefined) {
+      parts.push(digit);
+      continue;
+    }
+
+    const tens = SPOKEN_REFERENCE_TENS_MAP.get(token);
+
+    if (tens === undefined) {
+      return null;
+    }
+
+    const nextToken = tokens[index + 1];
+    const nextDigit =
+      nextToken === undefined
+        ? undefined
+        : SPOKEN_REFERENCE_DIGIT_MAP.get(nextToken);
+
+    if (nextDigit !== undefined) {
+      parts.push(String(tens + Number(nextDigit)));
+      index += 1;
+      continue;
+    }
+
+    parts.push(String(tens));
+  }
+
+  return parts.join("");
+}
+
+function parseSpokenReferenceCardinal(tokens: string[]): string | null {
+  let total = 0;
+  let current = 0;
+  let sawNumericToken = false;
+
+  for (const token of tokens) {
+    if (/^\d+$/.test(token)) {
+      current += Number(token);
+      sawNumericToken = true;
+      continue;
+    }
+
+    const digit = SPOKEN_REFERENCE_DIGIT_MAP.get(token);
+
+    if (digit !== undefined) {
+      current += Number(digit);
+      sawNumericToken = true;
+      continue;
+    }
+
+    const tens = SPOKEN_REFERENCE_TENS_MAP.get(token);
+
+    if (tens !== undefined) {
+      current += tens;
+      sawNumericToken = true;
+      continue;
+    }
+
+    const scale = SPOKEN_REFERENCE_SCALE_MAP.get(token);
+
+    if (scale === undefined) {
+      return null;
+    }
+
+    if (scale === 100) {
+      current = (current === 0 ? 1 : current) * scale;
+      sawNumericToken = true;
+      continue;
+    }
+
+    total += (current === 0 ? 1 : current) * scale;
+    current = 0;
+    sawNumericToken = true;
+  }
+
+  return sawNumericToken ? String(total + current) : null;
+}
+
+function numericReferenceSuffix(value: string): string | null {
+  const digitsOnly = value.replace(/\D/g, "");
+
+  return digitsOnly === "" ? null : digitsOnly;
+}
+
+function buildReferenceLookupPlan(value: string) {
+  const tokens = tokenizeListingReferenceCode(value);
+  const transcriptPreserved = tokens.join("");
+  const canonicalized = canonicalizeListingReferenceCode(value);
+  const exactCandidates = [...new Set([transcriptPreserved, canonicalized])]
+    .filter((candidate) => candidate !== "");
+
+  return {
+    exactCandidates,
+    numericSuffix:
+      numericReferenceSuffix(canonicalized) ??
+      numericReferenceSuffix(transcriptPreserved)
+  };
 }
 
 function normalizedReferenceCodeValue(
@@ -363,15 +589,44 @@ export function createListingsRepository(db: Database) {
         };
       }
 
-      const normalizedReferenceCode = canonicalizeListingReferenceCode(
-        params.referenceCode
-      );
+      const lookupPlan = buildReferenceLookupPlan(params.referenceCode);
 
-      if (normalizedReferenceCode === "") {
+      if (lookupPlan.exactCandidates.length === 0) {
         return { kind: "not_found" as const };
       }
 
-      const normalizedMatches = await db
+      for (const exactCandidate of lookupPlan.exactCandidates) {
+        const normalizedMatches = await db
+          .select({
+            ...listingDetailSelection
+          })
+          .from(listings)
+          .where(
+            and(
+              eq(listings.officeId, params.officeId),
+              eq(listings.status, "active"),
+              sql`${normalizedReferenceCodeValue(listings.referenceCode)} = ${exactCandidate}`
+            )
+          )
+          .limit(2);
+
+        if (normalizedMatches.length > 1) {
+          return { kind: "ambiguous" as const };
+        }
+
+        if (normalizedMatches.length === 1) {
+          return {
+            kind: "found" as const,
+            listing: normalizedMatches[0]!
+          };
+        }
+      }
+
+      if (lookupPlan.numericSuffix === null) {
+        return { kind: "not_found" as const };
+      }
+
+      const suffixMatches = await db
         .select({
           ...listingDetailSelection
         })
@@ -380,22 +635,22 @@ export function createListingsRepository(db: Database) {
           and(
             eq(listings.officeId, params.officeId),
             eq(listings.status, "active"),
-            sql`${normalizedReferenceCodeValue(listings.referenceCode)} = ${normalizedReferenceCode}`
+            sql`${normalizedReferenceCodeValue(listings.referenceCode)} like ${`%${lookupPlan.numericSuffix}`}`
           )
         )
         .limit(2);
 
-      if (normalizedMatches.length === 0) {
+      if (suffixMatches.length === 0) {
         return { kind: "not_found" as const };
       }
 
-      if (normalizedMatches.length > 1) {
+      if (suffixMatches.length > 1) {
         return { kind: "ambiguous" as const };
       }
 
       return {
         kind: "found" as const,
-        listing: normalizedMatches[0]!
+        listing: suffixMatches[0]!
       };
     },
 

@@ -332,6 +332,134 @@ test("integration contracts keep callback metadata fixed even if connection conf
   }
 });
 
+test("showing request creation dispatch reuses the office-scoped booking workflow contract path", async () => {
+  const fixture = await insertFixture();
+  const dispatchedContracts: BookingWorkflowDispatchContract[] = [];
+  const service = createIntegrationsService({
+    repository: createIntegrationsRepository(db),
+    bookingWorkflowDispatcher: {
+      async dispatchBookingWorkflow(contract) {
+        dispatchedContracts.push(contract);
+      }
+    }
+  });
+
+  try {
+    await service.dispatchShowingRequestCreated({
+      officeId: fixture.officeId,
+      showingRequestId: fixture.showingRequestId
+    });
+
+    assert.equal(dispatchedContracts.length, 1);
+    assert.equal(dispatchedContracts[0]?.kind, "booking_workflow");
+    assert.equal(dispatchedContracts[0]?.connection.id, fixture.bookingConnectionId);
+    assert.equal(dispatchedContracts[0]?.office.officeId, fixture.officeId);
+    assert.equal(
+      dispatchedContracts[0]?.showingRequest.id,
+      fixture.showingRequestId
+    );
+    assert.equal(dispatchedContracts[0]?.callback.path, "/v1/webhooks/n8n/booking-results");
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("showing request creation dispatch records an audit event instead of throwing when downstream booking dispatch fails", async () => {
+  const fixture = await insertFixture();
+  const service = createIntegrationsService({
+    repository: createIntegrationsRepository(db),
+    bookingWorkflowDispatcher: {
+      async dispatchBookingWorkflow() {
+        throw new Error("Booking workflow dispatch failed with status 503.");
+      }
+    }
+  });
+
+  try {
+    await assert.doesNotReject(
+      service.dispatchShowingRequestCreated({
+        officeId: fixture.officeId,
+        showingRequestId: fixture.showingRequestId
+      })
+    );
+
+    const [auditEvent] = await db
+      .select({
+        action: auditEvents.action,
+        actorType: auditEvents.actorType,
+        payload: auditEvents.payload
+      })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.officeId, fixture.officeId),
+          eq(auditEvents.action, "booking_dispatch_failed")
+        )
+      )
+      .orderBy(desc(auditEvents.createdAt))
+      .limit(1);
+
+    assert.equal(auditEvent?.action, "booking_dispatch_failed");
+    assert.equal(auditEvent?.actorType, "backend");
+    assert.deepEqual(auditEvent?.payload, {
+      sourceAction: "showing_request_created",
+      showingRequestId: fixture.showingRequestId,
+      errorCode: null,
+      error: "Booking workflow dispatch failed with status 503."
+    });
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test("showing request creation dispatch records a missing booking connection without throwing", async () => {
+  const fixture = await insertFixture();
+  const service = createIntegrationsService({
+    repository: createIntegrationsRepository(db),
+    bookingWorkflowDispatcher: {
+      async dispatchBookingWorkflow() {
+        throw new Error("dispatch should not be reached without a connection");
+      }
+    }
+  });
+
+  try {
+    await db
+      .delete(integrationConnections)
+      .where(eq(integrationConnections.id, fixture.bookingConnectionId));
+
+    await assert.doesNotReject(
+      service.dispatchShowingRequestCreated({
+        officeId: fixture.officeId,
+        showingRequestId: fixture.showingRequestId
+      })
+    );
+
+    const [auditEvent] = await db
+      .select({
+        payload: auditEvents.payload
+      })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.officeId, fixture.officeId),
+          eq(auditEvents.action, "booking_dispatch_failed")
+        )
+      )
+      .orderBy(desc(auditEvents.createdAt))
+      .limit(1);
+
+    assert.deepEqual(auditEvent?.payload, {
+      sourceAction: "showing_request_created",
+      showingRequestId: fixture.showingRequestId,
+      errorCode: "INTEGRATION_CONNECTION_NOT_FOUND",
+      error: "Active integration connection not found."
+    });
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
 test("crm webhook contract resolves an office-scoped call log payload", async () => {
   const fixture = await insertFixture();
   const service = createIntegrationsService({

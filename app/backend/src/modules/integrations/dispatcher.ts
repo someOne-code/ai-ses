@@ -1,6 +1,9 @@
 import { env } from "../../config/env.js";
 
-import type { CrmWebhookDispatchContract } from "./types.js";
+import type {
+  BookingWorkflowDispatchContract,
+  CrmWebhookDispatchContract
+} from "./types.js";
 
 const N8N_TRIGGER_SECRET_HEADER = "x-ai-ses-trigger-secret";
 
@@ -12,6 +15,10 @@ type DispatchLogger = {
 
 export interface CrmWorkflowDispatcher {
   dispatchCrmWebhook(contract: CrmWebhookDispatchContract): Promise<void>;
+}
+
+export interface BookingWorkflowDispatcher {
+  dispatchBookingWorkflow(contract: BookingWorkflowDispatchContract): Promise<void>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -68,6 +75,78 @@ function serializeDispatchBody(contract: CrmWebhookDispatchContract) {
     entity: contract.entity,
     event: contract.event,
     connection: contract.connection
+  };
+}
+
+function serializeBookingDispatchBody(contract: BookingWorkflowDispatchContract) {
+  return {
+    kind: contract.kind,
+    office: contract.office,
+    showingRequest: contract.showingRequest,
+    connection: contract.connection
+  };
+}
+
+export function createBookingWorkflowDispatcher(
+  options: {
+    baseUrl?: string;
+    triggerSecret?: string;
+    fetchFn?: FetchLike;
+    logger?: DispatchLogger;
+  } = {}
+): BookingWorkflowDispatcher {
+  const baseUrl = options.baseUrl ?? env.N8N_BASE_URL;
+  const triggerSecret = options.triggerSecret ?? env.N8N_BOOKING_TRIGGER_SECRET;
+  const fetchFn = options.fetchFn ?? fetch;
+  const logger = options.logger;
+
+  return {
+    async dispatchBookingWorkflow(contract) {
+      const triggerUrl = resolveTriggerUrl(baseUrl, contract.connection.config);
+
+      if (!triggerUrl) {
+        throw new Error("Booking workflow triggerPath is not configured.");
+      }
+
+      if (!triggerSecret) {
+        throw new Error("N8N_BOOKING_TRIGGER_SECRET is not configured.");
+      }
+
+      const response = await fetchFn(triggerUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [N8N_TRIGGER_SECRET_HEADER]: triggerSecret
+        },
+        body: JSON.stringify(serializeBookingDispatchBody(contract))
+      });
+
+      if (response.ok) {
+        return;
+      }
+
+      let details: unknown = null;
+
+      try {
+        details = await response.json();
+      } catch {
+        details = await response.text().catch(() => null);
+      }
+
+      logger?.warn(
+        {
+          event: "booking_workflow_dispatch_failed",
+          status: response.status,
+          triggerUrl,
+          details: isJsonObject(details) || typeof details === "string" ? details : null
+        },
+        "Booking workflow dispatch failed."
+      );
+
+      throw new Error(
+        `Booking workflow dispatch failed with status ${response.status}.`
+      );
+    }
   };
 }
 
@@ -145,6 +224,27 @@ export function createN8nCrmWorkflowDispatcherFromEnv(
   return createCrmWorkflowDispatcher({
     baseUrl: env.N8N_BASE_URL,
     triggerSecret: env.N8N_CRM_TRIGGER_SECRET,
+    ...(options.fetchFn ? { fetchFn: options.fetchFn } : {}),
+    ...(options.logger ? { logger: options.logger } : {})
+  });
+}
+
+export function createN8nBookingWorkflowDispatcherFromEnv(
+  options: {
+    fetchFn?: FetchLike;
+    logger?: DispatchLogger;
+  } = {}
+) {
+  const baseUrl = process.env.N8N_BASE_URL;
+  const triggerSecret = process.env.N8N_BOOKING_TRIGGER_SECRET;
+
+  if (!baseUrl || !triggerSecret) {
+    return undefined;
+  }
+
+  return createBookingWorkflowDispatcher({
+    baseUrl,
+    triggerSecret,
     ...(options.fetchFn ? { fetchFn: options.fetchFn } : {}),
     ...(options.logger ? { logger: options.logger } : {})
   });

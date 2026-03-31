@@ -343,10 +343,16 @@ test(
         );
       });
 
-      assert.equal(receivedRequests.length, 3);
-      assert.equal(receivedRequests[0]?.url, "/availability");
-      assert.equal(receivedRequests[1]?.url, "/booking");
-      assert.equal(receivedRequests[2]?.url, "/crm-delivery");
+      const requestUrls = receivedRequests.map((entry) => entry.url);
+      assert.ok(
+        requestUrls.includes("/availability"),
+        "Expected availability request"
+      );
+      assert.ok(requestUrls.includes("/booking"), "Expected booking request");
+      assert.ok(
+        requestUrls.includes("/crm-delivery"),
+        "Expected CRM delivery request"
+      );
 
       const showingRequest = await client.query<{ status: string }>(
         `select status

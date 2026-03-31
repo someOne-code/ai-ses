@@ -45,6 +45,76 @@ async function cleanupFixture(input: {
   await db.delete(tenants).where(inArray(tenants.id, input.tenantIds));
 }
 
+test("searchListingsDetailed preserves shortlist speech fields without widening to full detail", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const listingId = randomUUID();
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Shortlist Speech Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Shortlist Speech Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values({
+    id: listingId,
+    officeId,
+    referenceCode: "DEMO-IST-3401",
+    title: "Kadikoy Moda 2+1 Search Fixture",
+    description: "Shortlist speech preservation fixture.",
+    propertyType: "apartment",
+    listingType: "rent",
+    status: "active",
+    price: "65000.00",
+    currency: "TRY",
+    bedrooms: "2",
+    bathrooms: "1",
+    netM2: "95.00",
+    district: "Kadikoy",
+    neighborhood: "Moda",
+    buildingAge: "8",
+    dues: "2500.00",
+    hasBalcony: true,
+    hasParking: false,
+    hasElevator: true,
+    floorNumber: "3",
+    addressText: "Moda, Kadikoy, Istanbul"
+  });
+
+  try {
+    const searchResult = await listingsService.searchListingsDetailed({
+      officeId,
+      district: "Kadikoy",
+      listingType: "rent",
+      searchMode: "structured",
+      limit: 5
+    });
+    const listing = searchResult.listings[0];
+
+    assert.equal(searchResult.matchInterpretation, "verified_structured_match");
+    assert.equal(searchResult.listings.length, 1);
+    assert.equal(listing?.referenceCode, "DEMO-IST-3401");
+    assert.equal(listing?.dues, 2500);
+    assert.equal(listing?.buildingAge, 8);
+    assert.equal(listing?.hasBalcony, true);
+    assert.equal(listing?.hasParking, false);
+    assert.equal(listing?.hasElevator, true);
+    assert.equal("floorNumber" in (listing ?? {}), false);
+    assert.equal("addressText" in (listing ?? {}), false);
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [listingId]
+    });
+  }
+});
+
 test("listing reference lookup resolves deterministic spoken spacing and hyphen variants", async () => {
   const tenantId = randomUUID();
   const officeId = randomUUID();

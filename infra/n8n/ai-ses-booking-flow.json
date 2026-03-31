@@ -152,6 +152,12 @@
               "type": "number"
             },
             {
+              "id": "9ad4d41e-7d38-4b62-b840-e012d3472b52",
+              "name": "cleanupCreatedEvent",
+              "value": "={{ Boolean($('Webhook').item.json.body.connection.config.cleanupCreatedEvent ?? false) }}",
+              "type": "boolean"
+            },
+            {
               "id": "28e47a3c-1a11-4d3a-bca9-3c33d1be5082",
               "name": "providerKind",
               "value": "={{ $('Webhook').item.json.body.connection.config.provider || 'generic_webhook' }}",
@@ -552,6 +558,59 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2ef447d2-90cb-4806-b5d2-83ba8ded3508",
+              "leftValue": "={{ String($('Normalize Dispatch').item.json.cleanupCreatedEvent) }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1260,
+        -260
+      ],
+      "id": "d92f8bd6-5e8c-4fb6-80e9-0be8567f7b7f",
+      "name": "If Cleanup Created Event Requested"
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Normalize Dispatch').item.json.calendarId }}"
+        },
+        "eventId": "={{ $('Create Google Calendar Event').item.json.id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        1460,
+        -320
+      ],
+      "id": "55876754-fbef-4975-9f0a-af0954bdc18b",
+      "name": "Delete Google Calendar Event",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
         "assignments": {
           "assignments": [
             {
@@ -563,7 +622,7 @@
             {
               "id": "1c2bbf93-f612-4fd5-a266-c1d551e0e566",
               "name": "callbackAccepted",
-              "value": "={{ Boolean($json.data?.received) }}",
+              "value": "={{ Boolean($('Send Confirmed Result Callback').item.json.data?.received) }}",
               "type": "boolean"
             }
           ]
@@ -861,7 +920,7 @@
       "main": [
         [
           {
-            "node": "Normalize Confirmed Callback Result",
+            "node": "If Cleanup Created Event Requested",
             "type": "main",
             "index": 0
           }
@@ -884,6 +943,35 @@
         [
           {
             "node": "Normalize Booking Creation Failed Callback Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Cleanup Created Event Requested": {
+      "main": [
+        [
+          {
+            "node": "Delete Google Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize Confirmed Callback Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Google Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Normalize Confirmed Callback Result",
             "type": "main",
             "index": 0
           }
@@ -946,8 +1034,5 @@
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "91d59bdf-74c6-4e7d-8c80-92c04edabf3f",
-  "meta": {},
-  "id": "aiSesBookingFlow",
   "tags": []
 }

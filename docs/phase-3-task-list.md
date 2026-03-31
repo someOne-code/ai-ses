@@ -86,6 +86,19 @@ This task list covers the first booking and CRM sync implementation pass after h
 - do not start with customer-specific live database connectors
 - do not jump to major admin/operator UI before this onboarding path exists
 
+## Later Reliability Hardening
+
+- do not treat this as part of the first booking and CRM foundation pass
+- first close live end-to-end acceptance for:
+  - `showing_request -> booking execution -> booking_result_recorded -> crm_delivery_result_recorded`
+- after that, if `booking_dispatch_failed` audit events appear repeatedly in live or realistic smoke runs, open a narrow reliability hardening slice
+- preferred hardening direction for that later slice:
+  - keep `showing_requests` backend-owned
+  - preserve idempotency
+  - add retry-safe booking dispatch reliability, such as a narrow outbox or equivalent retryable backend-owned dispatch mechanism
+- do not start this hardening work before live acceptance proves it is needed
+- do not widen that future slice into a generic event bus or broad async platform redesign
+
 ## Open Decisions
 
 - whether booking result persistence updates `showing_requests` directly or only writes audit events in the first pass

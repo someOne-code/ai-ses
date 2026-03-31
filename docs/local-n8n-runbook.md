@@ -137,6 +137,11 @@ Important:
 
 - use the actual Google Calendar ID visible to the connected credential, not a guessed `primary` value
 - the smoke may create a real calendar event and should clean it up after verification
+- the repo-owned Google success smoke now uses a run-unique future slot to avoid collisions with stale real events left by prior provider runs
+- keep the two provider acceptance cases separate:
+  - the `success` smoke should use a run-unique future slot that is expected to be free
+  - the `unavailable` or provider-failure smoke should be its own separate case and must not be inferred from the success path colliding with a stale event
+- if the success smoke regresses with `available: false`, inspect the calendar for a real event occupying the generated slot before blaming the node or credential
 
 Run the live CRM workflow smoke:
 
@@ -210,6 +215,42 @@ Callback writeback nuance:
 - in that case the workflow response must report `callbackAccepted: false` instead of failing the whole workflow response
 
 Repo-only tests are not enough for this step.
+
+## Common Misreads
+
+These are the failure patterns that most often waste time during local debug:
+
+1. `If Trigger Secret Valid` goes to the false branch
+
+- this is expected for the repo smoke's deliberate `wrong-secret` request
+- do not treat that execution as evidence that the workflow cannot reach downstream branches
+- first prove whether you are looking at the negative auth test or the real trigger-secret run
+
+2. The booking flow does not hit the Google Calendar branch
+
+- this is not automatically an auth or expression bug
+- first inspect `Normalize Dispatch.providerKind`
+- if it is `generic_webhook`, the workflow is behaving correctly and should go to the generic availability and booking path
+- the Google nodes should only run when `providerKind` is `google_calendar`
+
+3. n8n shows `Workflow with id ... exists already`
+
+- this points to an import or save collision in the live editor state
+- do not diagnose this as an expression-syntax problem first
+- project-owned workflow JSON in this repo should stay import-safe and avoid top-level workflow identity metadata that can force duplicate-create collisions
+
+4. An `$env...` expression preview is red in the editor
+
+- this is not, by itself, proof that the repo expression syntax is wrong
+- first confirm the local n8n process was started from the repo-owned env file and fully restarted after env changes
+- then confirm the execution you are inspecting actually used the intended trigger secret and provider branch
+- treat live execution evidence as the source of truth before rewriting a working repo expression
+
+Use these checks in order:
+
+1. confirm the execution secret is the one you intended to test
+2. confirm `providerKind` before expecting the Google branch
+3. confirm you are editing the intended live workflow instead of a colliding imported copy
 
 ## Failure Pattern: Env Access Denied
 

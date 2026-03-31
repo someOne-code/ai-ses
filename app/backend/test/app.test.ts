@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 
+import { eq } from "drizzle-orm";
 import { sign } from "retell-sdk";
 
+import { db } from "../src/db/client.js";
+import {
+  listings,
+  offices,
+  tenants
+} from "../src/db/schema/index.js";
 import { AppError } from "../src/lib/errors.js";
+import {
+  createListingsRepository,
+  canonicalizeListingReferenceCode
+} from "../src/modules/listings/repository.js";
 import {
   createListingsService,
   type ListingsService
@@ -13,10 +25,18 @@ import type {
   MainListingSearchDocumentRefreshResult,
   ListingSearchItem
 } from "../src/modules/listings/types.js";
-import { parseSearchListingsQuery } from "../src/modules/listings/types.js";
+import {
+  parseListingByReferenceParams,
+  parseSearchListingsQuery
+} from "../src/modules/listings/types.js";
 import type { RetellRepository } from "../src/modules/retell/repository.js";
 import { createRetellService } from "../src/modules/retell/service.js";
-import { retellToolContracts } from "../src/modules/retell/types.js";
+import {
+  parseCreateShowingRequestToolArgs,
+  parseGetListingByReferenceToolArgs,
+  parseSearchListingsToolArgs,
+  retellToolContracts
+} from "../src/modules/retell/types.js";
 import type { ShowingRequestsService } from "../src/modules/showing-requests/service.js";
 import type { ShowingRequestRecord } from "../src/modules/showing-requests/types.js";
 
@@ -143,6 +163,26 @@ const LISTING_FIXTURES: ListingFixture[] = [
   }
 ];
 
+function toListingSearchItem(
+  listing: ListingFixture
+): ListingSearchItem {
+  const { createdAt: _createdAt, officeId: _officeId, ...detail } = listing;
+  const {
+    description: _description,
+    grossM2: _grossM2,
+    floorNumber: _floorNumber,
+    buildingAge: _buildingAge,
+    dues: _dues,
+    addressText: _addressText,
+    hasBalcony: _hasBalcony,
+    hasParking: _hasParking,
+    hasElevator: _hasElevator,
+    ...searchItem
+  } = detail;
+
+  return searchItem;
+}
+
 function createFakeListingsService(): ListingsService {
   async function searchListingsDetailed(filters: Parameters<ListingsService["searchListings"]>[0]) {
     const listings = LISTING_FIXTURES
@@ -196,7 +236,7 @@ function createFakeListingsService(): ListingsService {
       )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, filters.limit)
-      .map(({ createdAt: _createdAt, officeId: _officeId, ...listing }) => listing);
+      .map(toListingSearchItem);
 
     return {
       listings,
@@ -397,6 +437,82 @@ async function createRetellSignature(payload: unknown) {
   );
 }
 
+async function withSeededReferenceLookupService<T>(
+  callback: (context: {
+    service: ListingsService;
+    officeId: string;
+    otherOfficeId: string;
+    insertListing: (input: {
+      officeId?: string;
+      referenceCode: string;
+      title?: string;
+      status?: string;
+    }) => Promise<{
+      id: string;
+      officeId: string;
+      referenceCode: string;
+    }>;
+  }) => Promise<T>
+) {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const otherOfficeId = randomUUID();
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Reference Lookup Tenant ${tenantId}`
+  });
+  await db.insert(offices).values([
+    {
+      id: officeId,
+      tenantId,
+      name: "Reference Lookup Office"
+    },
+    {
+      id: otherOfficeId,
+      tenantId,
+      name: "Reference Lookup Other Office"
+    }
+  ]);
+
+  const service = createListingsService(createListingsRepository(db));
+
+  const insertListing = async (input: {
+    officeId?: string;
+    referenceCode: string;
+    title?: string;
+    status?: string;
+  }) => {
+    const id = randomUUID();
+    const targetOfficeId = input.officeId ?? officeId;
+
+    await db.insert(listings).values({
+      id,
+      officeId: targetOfficeId,
+      referenceCode: input.referenceCode,
+      title: input.title ?? input.referenceCode,
+      status: input.status ?? "active"
+    });
+
+    return {
+      id,
+      officeId: targetOfficeId,
+      referenceCode: input.referenceCode
+    };
+  };
+
+  try {
+    return await callback({
+      service,
+      officeId,
+      otherOfficeId,
+      insertListing
+    });
+  } finally {
+    await db.delete(tenants).where(eq(tenants.id, tenantId));
+  }
+}
+
 test("GET /health returns 200", async () => {
   const app = await createApp({
     registerDatabasePlugin: false,
@@ -475,6 +591,31 @@ test("listing search applies structured filters", async () => {
     response.json().data.map((listing: ListingSearchItem) => listing.referenceCode),
     ["REF-001"]
   );
+
+  await app.close();
+});
+
+test("listing search returns shortlist data without detail-only facts", async () => {
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService: createFakeListingsService(),
+    showingRequestsService: createFakeShowingRequestsService().service
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/v1/offices/${OFFICE_1_ID}/listings/search?district=Kadikoy&listingType=sale`
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().data.length, 1);
+  assert.equal(response.json().data[0].referenceCode, "REF-001");
+  assert.equal("dues" in response.json().data[0], false);
+  assert.equal("buildingAge" in response.json().data[0], false);
+  assert.equal("hasBalcony" in response.json().data[0], false);
+  assert.equal("hasParking" in response.json().data[0], false);
+  assert.equal("hasElevator" in response.json().data[0], false);
 
   await app.close();
 });
@@ -596,6 +737,28 @@ test("listing by reference does not return inactive listings", async () => {
 
   assert.equal(response.statusCode, 404);
   assert.equal(response.json().error.code, "LISTING_NOT_FOUND");
+
+  await app.close();
+});
+
+test("listing by reference keeps detail-only facts behind verified lookup", async () => {
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService: createFakeListingsService(),
+    showingRequestsService: createFakeShowingRequestsService().service
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/v1/offices/${OFFICE_1_ID}/listings/by-reference/REF-001`
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().data.referenceCode, "REF-001");
+  assert.equal(response.json().data.dues, 1500);
+  assert.equal(response.json().data.buildingAge, 6);
+  assert.equal(response.json().data.hasBalcony, true);
 
   await app.close();
 });
@@ -742,6 +905,33 @@ test("showing request creation accepts a single caller name and blank optional e
   await app.close();
 });
 
+test("showing request creation normalizes spoken Turkish mobile numbers to E.164", async () => {
+  const showingRequests = createFakeShowingRequestsService();
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService: createFakeListingsService(),
+    showingRequestsService: showingRequests.service
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/offices/${OFFICE_1_ID}/showing-requests`,
+    payload: {
+      listingId: LISTING_FIXTURES[0].id,
+      customerName: "Umut",
+      customerPhone: "5056924071",
+      preferredDatetime: "2026-03-25T12:00:00.000Z"
+    }
+  });
+
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.json().data.customerPhone, "+905056924071");
+  assert.equal(showingRequests.createdRequests[0]?.customerPhone, "+905056924071");
+
+  await app.close();
+});
+
 test("showing request creation rejects literal callback placeholders", async () => {
   const showingRequests = createFakeShowingRequestsService();
   const app = await createApp({
@@ -758,6 +948,33 @@ test("showing request creation rejects literal callback placeholders", async () 
       listingId: LISTING_FIXTURES[0].id,
       customerName: "Umut",
       customerPhone: "{{user_number}}",
+      preferredDatetime: "2026-03-25T12:00:00.000Z"
+    }
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error.code, "VALIDATION_ERROR");
+  assert.equal(showingRequests.createdRequests.length, 0);
+
+  await app.close();
+});
+
+test("showing request creation rejects incomplete spoken Turkish mobile numbers", async () => {
+  const showingRequests = createFakeShowingRequestsService();
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService: createFakeListingsService(),
+    showingRequestsService: showingRequests.service
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/offices/${OFFICE_1_ID}/showing-requests`,
+    payload: {
+      listingId: LISTING_FIXTURES[0].id,
+      customerName: "Umut",
+      customerPhone: "505692471",
       preferredDatetime: "2026-03-25T12:00:00.000Z"
     }
   });
@@ -912,6 +1129,281 @@ test("listing search query rejects hybrid mode without queryText", () => {
   );
 });
 
+test("voice search parser ignores Retell zero placeholders for optional numeric fields", () => {
+  const parsed = parseSearchListingsToolArgs({
+    district: "Kadikoy",
+    minPrice: "0",
+    maxPrice: 0,
+    limit: 0
+  });
+
+  assert.equal(parsed.district, "Kadikoy");
+  assert.equal(parsed.minPrice, undefined);
+  assert.equal(parsed.maxPrice, undefined);
+  assert.equal(parsed.limit, 5);
+  assert.equal(parsed.searchMode, "structured");
+});
+
+test("listing search query opens only minPrice repair for contradictory price ranges", () => {
+  assert.throws(
+    () =>
+      parseSearchListingsQuery({
+        minPrice: 900000,
+        maxPrice: 100000
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof AppError);
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.code, "VALIDATION_ERROR");
+
+      const details = error.details as
+        | {
+            repairStep?: string;
+            fieldErrors?: Array<{ field: string; message: string }>;
+          }
+        | undefined;
+
+      assert.equal(details?.repairStep, "minPrice");
+      assert.deepEqual(
+        details?.fieldErrors?.map((entry) => entry.field),
+        ["minPrice"]
+      );
+      assert.match(
+        details?.fieldErrors?.[0]?.message ?? "",
+        /greater than maxPrice/i
+      );
+
+      return true;
+    }
+  );
+});
+
+test("listing search query opens only maxPrice repair when the upper bound is invalid", () => {
+  assert.throws(
+    () =>
+      parseSearchListingsQuery({
+        minPrice: 100000,
+        maxPrice: -1
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof AppError);
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.code, "VALIDATION_ERROR");
+
+      const details = error.details as
+        | {
+            repairStep?: string;
+            fieldErrors?: Array<{ field: string; message: string }>;
+          }
+        | undefined;
+
+      assert.equal(details?.repairStep, "maxPrice");
+      assert.deepEqual(
+        details?.fieldErrors?.map((entry) => entry.field),
+        ["maxPrice"]
+      );
+      assert.match(
+        details?.fieldErrors?.[0]?.message ?? "",
+        />=0|greater than or equal to 0/i
+      );
+
+      return true;
+    }
+  );
+});
+
+test("listing search query keeps non-owner validation errors from drifting into numeric repair steps", () => {
+  assert.throws(
+    () =>
+      parseSearchListingsQuery({
+        searchMode: "hybrid"
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof AppError);
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.code, "VALIDATION_ERROR");
+
+      const details = error.details as
+        | {
+            repairStep?: string;
+            fieldErrors?: Array<{ field: string; message: string }>;
+          }
+        | undefined;
+
+      assert.equal(details?.repairStep, "unknown");
+      assert.deepEqual(
+        details?.fieldErrors?.map((entry) => entry.field),
+        ["queryText"]
+      );
+
+      return true;
+    }
+  );
+});
+
+test("listing by reference params open only referenceCode repair when blank", () => {
+  assert.throws(
+    () =>
+      parseListingByReferenceParams({
+        officeId: OFFICE_1_ID,
+        referenceCode: "   "
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof AppError);
+      assert.equal(error.statusCode, 400);
+      assert.equal(error.code, "VALIDATION_ERROR");
+
+      const details = error.details as
+        | {
+            repairStep?: string;
+            fieldErrors?: Array<{ field: string; message: string }>;
+          }
+        | undefined;
+
+      assert.equal(details?.repairStep, "referenceCode");
+      assert.deepEqual(
+        details?.fieldErrors?.map((entry) => entry.field),
+        ["referenceCode"]
+      );
+      assert.match(
+        details?.fieldErrors?.[0]?.message ?? "",
+        /expected string to have >=1 characters/i
+      );
+
+      return true;
+    }
+  );
+});
+
+test("voice reference-code parser preserves the full spoken candidate after trim", () => {
+  const parsed = parseGetListingByReferenceToolArgs({
+    referenceCode: "  DEMO IST 34 01  "
+  });
+
+  assert.equal(parsed.referenceCode, "DEMO IST 34 01");
+});
+
+test("reference-code canonicalizer converts spoken Turkish digits into numeric code", () => {
+  assert.equal(
+    canonicalizeListingReferenceCode("DEMO IST üç dört sıfır bir"),
+    "DEMOIST3401"
+  );
+});
+
+test("reference-code canonicalizer converts spoken Turkish digit sequence into numeric code", () => {
+  assert.equal(
+    canonicalizeListingReferenceCode(
+      "DEMO IST \u00fc\u00e7 d\u00f6rt s\u0131f\u0131r bir"
+    ),
+    "DEMOIST3401"
+  );
+});
+
+test("reference-code canonicalizer converts spoken Turkish tens into numeric code", () => {
+  assert.equal(
+    canonicalizeListingReferenceCode(
+      "DEMO IST otuz d\u00f6rt s\u0131f\u0131r bir"
+    ),
+    "DEMOIST3401"
+  );
+});
+
+test("reference-code canonicalizer converts spoken Turkish cardinal groups into numeric code", () => {
+  assert.equal(
+    canonicalizeListingReferenceCode(
+      "DEMO IST \u00fc\u00e7 bin d\u00f6rt y\u00fcz bir"
+    ),
+    "DEMOIST3401"
+  );
+});
+
+test("listing reference lookup resolves spoken and segmented variants to the same office-scoped listing", async () => {
+  await withSeededReferenceLookupService(
+    async ({ service, officeId, otherOfficeId, insertListing }) => {
+      const expectedListing = await insertListing({
+        referenceCode: "DEMO-IST-3401",
+        title: "Demo Istanbul Listing"
+      });
+
+      await insertListing({
+        officeId: otherOfficeId,
+        referenceCode: "DEMO-IST-3401",
+        title: "Other Office Listing"
+      });
+
+      const variants = [
+        "DEMO IST \u00fc\u00e7 d\u00f6rt s\u0131f\u0131r bir",
+        "DEMO IST otuz d\u00f6rt s\u0131f\u0131r bir",
+        "DEMO IST \u00fc\u00e7 bin d\u00f6rt y\u00fcz bir",
+        "DEMO IST 30 34 01",
+        "30 34 01"
+      ];
+
+      for (const referenceCode of variants) {
+        const listing = await service.getListingByReference({
+          officeId,
+          referenceCode
+        });
+
+        assert.equal(listing.id, expectedListing.id);
+        assert.equal(listing.referenceCode, "DEMO-IST-3401");
+        assert.equal(listing.title, "Demo Istanbul Listing");
+      }
+    }
+  );
+});
+
+test("listing reference lookup does not auto-resolve ambiguous office suffixes", async () => {
+  await withSeededReferenceLookupService(
+    async ({ service, officeId, insertListing }) => {
+      await insertListing({
+        referenceCode: "DEMO-IST-3401",
+        title: "Demo Istanbul Listing"
+      });
+      await insertListing({
+        referenceCode: "ALT-3401",
+        title: "Alternate Listing"
+      });
+
+      await assert.rejects(
+        service.getListingByReference({
+          officeId,
+          referenceCode: "30 34 01"
+        }),
+        (error: unknown) =>
+          error instanceof AppError &&
+          error.statusCode === 409 &&
+          error.code === "LISTING_REFERENCE_AMBIGUOUS"
+      );
+    }
+  );
+});
+
+test("voice showing-request parser normalizes spoken Turkish mobile formats to one candidate", () => {
+  const local = parseCreateShowingRequestToolArgs({
+    listingId: LISTING_FIXTURES[0]!.id,
+    customerName: "Umut",
+    customerPhone: "5056924071",
+    preferredDatetime: "2026-03-25T12:00:00.000Z"
+  });
+  const leadingZero = parseCreateShowingRequestToolArgs({
+    listingId: LISTING_FIXTURES[0]!.id,
+    customerName: "Umut",
+    customerPhone: "05056924071",
+    preferredDatetime: "2026-03-25T12:00:00.000Z"
+  });
+  const e164WithoutPlus = parseCreateShowingRequestToolArgs({
+    listingId: LISTING_FIXTURES[0]!.id,
+    customerName: "Umut",
+    customerPhone: "905056924071",
+    preferredDatetime: "2026-03-25T12:00:00.000Z"
+  });
+
+  assert.equal(local.customerPhone, "+905056924071");
+  assert.equal(leadingZero.customerPhone, "+905056924071");
+  assert.equal(e164WithoutPlus.customerPhone, "+905056924071");
+});
+
 test("hybrid search logs query embedding failures before continuing without vector retrieval", async () => {
   const warningLogs: Array<{
     bindings: Record<string, unknown>;
@@ -1003,6 +1495,60 @@ test("hybrid search logs query embedding failures before continuing without vect
   );
 });
 
+test("listings service strips detail-only facts from search results before follow-up lookup", async () => {
+  const service = createListingsService({
+    async search() {
+      return {
+        listings: [
+          {
+            id: LISTING_FIXTURES[0]!.id,
+            referenceCode: LISTING_FIXTURES[0]!.referenceCode,
+            title: LISTING_FIXTURES[0]!.title,
+            listingType: LISTING_FIXTURES[0]!.listingType,
+            propertyType: LISTING_FIXTURES[0]!.propertyType,
+            price: String(LISTING_FIXTURES[0]!.price),
+            currency: LISTING_FIXTURES[0]!.currency,
+            bedrooms: String(LISTING_FIXTURES[0]!.bedrooms),
+            bathrooms: String(LISTING_FIXTURES[0]!.bathrooms),
+            netM2: String(LISTING_FIXTURES[0]!.netM2),
+            district: LISTING_FIXTURES[0]!.district,
+            neighborhood: LISTING_FIXTURES[0]!.neighborhood,
+            status: LISTING_FIXTURES[0]!.status,
+            dues: String(LISTING_FIXTURES[0]!.dues),
+            buildingAge: String(LISTING_FIXTURES[0]!.buildingAge),
+            hasBalcony: LISTING_FIXTURES[0]!.hasBalcony,
+            hasParking: LISTING_FIXTURES[0]!.hasParking,
+            hasElevator: LISTING_FIXTURES[0]!.hasElevator,
+            createdAt: new Date(LISTING_FIXTURES[0]!.createdAt)
+          }
+        ],
+        matchInterpretation: "verified_structured_match" as const
+      };
+    },
+    async findByReference() {
+      throw new Error("findByReference should not be called in this test");
+    },
+    async findActiveById() {
+      throw new Error("findActiveById should not be called in this test");
+    }
+  });
+
+  const results = await service.searchListings({
+    officeId: OFFICE_1_ID,
+    district: "Kadikoy",
+    searchMode: "structured",
+    limit: 5
+  });
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.referenceCode, "REF-001");
+  assert.equal("dues" in results[0]!, false);
+  assert.equal("buildingAge" in results[0]!, false);
+  assert.equal("hasBalcony" in results[0]!, false);
+  assert.equal("hasParking" in results[0]!, false);
+  assert.equal("hasElevator" in results[0]!, false);
+});
+
 test("POST /v1/retell/tools executes an office-scoped search with a valid signature", async () => {
   const retell = createFakeRetellService();
   const app = await createApp({
@@ -1045,6 +1591,10 @@ test("POST /v1/retell/tools executes an office-scoped search with a valid signat
     ),
     ["REF-001"]
   );
+  assert.equal("dues" in response.json().data.listings[0], false);
+  assert.equal("buildingAge" in response.json().data.listings[0], false);
+  assert.equal("hasBalcony" in response.json().data.listings[0], false);
+  assert.equal(response.json().data.listings[0].spokenDues, null);
   assert.equal(retell.auditEvents.length, 1);
 
   await app.close();

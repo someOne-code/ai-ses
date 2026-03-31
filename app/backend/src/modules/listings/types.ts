@@ -1,10 +1,29 @@
 import { z } from "zod";
 
 import { AppError } from "../../lib/errors.js";
+import type {
+  RepairStep,
+  VoiceFieldError,
+  VoiceRepairDetails
+} from "../retell/repair-types.js";
 
 const MAX_SEARCH_LIMIT = 20;
 const DEFAULT_SEARCH_LIMIT = 5;
 const searchModeSchema = z.enum(["structured", "hybrid"]);
+const listingSearchValidationFields = [
+  "district",
+  "neighborhood",
+  "listingType",
+  "propertyType",
+  "queryText",
+  "minPrice",
+  "maxPrice",
+  "minBedrooms",
+  "minBathrooms",
+  "minNetM2",
+  "maxNetM2",
+  "limit"
+] as const;
 
 const officeParamsSchema = z.object({
   officeId: z.string().uuid()
@@ -32,6 +51,10 @@ function optionalNumberQuery(schema: z.ZodNumber) {
   }, z.coerce.number().pipe(schema).optional());
 }
 
+function isFiniteNonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 const searchListingsQuerySchema = z
   .object({
     district: z.string().trim().min(1).optional(),
@@ -51,8 +74,8 @@ const searchListingsQuerySchema = z
   .strict()
   .superRefine((value, ctx) => {
     if (
-      value.minPrice !== undefined &&
-      value.maxPrice !== undefined &&
+      isFiniteNonNegativeNumber(value.minPrice) &&
+      isFiniteNonNegativeNumber(value.maxPrice) &&
       value.minPrice > value.maxPrice
     ) {
       ctx.addIssue({
@@ -63,8 +86,8 @@ const searchListingsQuerySchema = z
     }
 
     if (
-      value.minNetM2 !== undefined &&
-      value.maxNetM2 !== undefined &&
+      isFiniteNonNegativeNumber(value.minNetM2) &&
+      isFiniteNonNegativeNumber(value.maxNetM2) &&
       value.minNetM2 > value.maxNetM2
     ) {
       ctx.addIssue({
@@ -149,6 +172,40 @@ export type SearchListingsQuery = z.output<typeof searchListingsQuerySchema>;
 export type SearchListingsFilters = ListingOfficeParams & SearchListingsQuery;
 export type HybridListingSearchInput = SearchListingsFilters;
 
+export type ListingSearchValidationField =
+  (typeof listingSearchValidationFields)[number];
+
+export interface ListingSearchValidationDetails
+  extends VoiceRepairDetails<
+    RepairStep,
+    ListingSearchValidationField
+  > {}
+
+export interface ListingReferenceValidationDetails
+  extends VoiceRepairDetails<RepairStep, "referenceCode"> {}
+
+const listingSearchRepairOwners = {
+  minPrice: "minPrice",
+  maxPrice: "maxPrice"
+} as const satisfies Partial<Record<ListingSearchValidationField, RepairStep>>;
+
+type ListingSearchRepairOwnerField = keyof typeof listingSearchRepairOwners;
+
+function isListingSearchRepairOwnerField(
+  field: ListingSearchValidationField | "unknown"
+): field is ListingSearchRepairOwnerField {
+  return field === "minPrice" || field === "maxPrice";
+}
+
+function isListingSearchValidationField(
+  value: unknown
+): value is ListingSearchValidationField {
+  return (
+    typeof value === "string" &&
+    listingSearchValidationFields.includes(value as ListingSearchValidationField)
+  );
+}
+
 function parseWithSchema<T>(
   schema: z.ZodType<T>,
   input: unknown,
@@ -163,6 +220,59 @@ function parseWithSchema<T>(
   return result.data;
 }
 
+export function toListingSearchValidationDetails(
+  error: z.ZodError
+): ListingSearchValidationDetails {
+  const fieldErrors: Array<VoiceFieldError<ListingSearchValidationField>> =
+    error.issues.map((issue) => {
+      const head = issue.path[0];
+      const field = isListingSearchValidationField(head) ? head : "unknown";
+
+      return {
+        field,
+        message: issue.message
+      };
+    });
+
+  const repairOwnerField = fieldErrors
+    .map((entry) => entry.field)
+    .find(isListingSearchRepairOwnerField);
+
+  const repairStep =
+    repairOwnerField === undefined
+      ? "unknown"
+      : listingSearchRepairOwners[repairOwnerField];
+
+  return {
+    code: "VALIDATION_ERROR",
+    repairStep,
+    fieldErrors
+  };
+}
+
+export function toListingReferenceValidationDetails(
+  error: z.ZodError
+): ListingReferenceValidationDetails {
+  const fieldErrors: Array<VoiceFieldError<"referenceCode">> = error.issues.map((issue) => {
+    const head = issue.path[0];
+    const field: "referenceCode" | "unknown" =
+      head === "referenceCode" ? "referenceCode" : "unknown";
+
+    return {
+      field,
+      message: issue.message
+    };
+  });
+
+  return {
+    code: "VALIDATION_ERROR",
+    repairStep: fieldErrors.some((entry) => entry.field === "referenceCode")
+      ? "referenceCode"
+      : "unknown",
+    fieldErrors
+  };
+}
+
 export function parseListingOfficeParams(input: unknown): ListingOfficeParams {
   return parseWithSchema(
     officeParamsSchema,
@@ -174,11 +284,18 @@ export function parseListingOfficeParams(input: unknown): ListingOfficeParams {
 export function parseListingByReferenceParams(
   input: unknown
 ): ListingByReferenceParams {
-  return parseWithSchema(
-    listingByReferenceParamsSchema,
-    input,
-    "Invalid listing reference lookup."
-  );
+  const result = listingByReferenceParamsSchema.safeParse(input);
+
+  if (!result.success) {
+    throw new AppError(
+      "Invalid listing reference lookup.",
+      400,
+      "VALIDATION_ERROR",
+      toListingReferenceValidationDetails(result.error)
+    );
+  }
+
+  return result.data;
 }
 
 export function parseListingSearchDocumentRefreshParams(
@@ -192,9 +309,16 @@ export function parseListingSearchDocumentRefreshParams(
 }
 
 export function parseSearchListingsQuery(input: unknown): SearchListingsQuery {
-  return parseWithSchema(
-    searchListingsQuerySchema,
-    input,
-    "Invalid listings search query."
-  );
+  const result = searchListingsQuerySchema.safeParse(input);
+
+  if (!result.success) {
+    throw new AppError(
+      "Invalid listings search query.",
+      400,
+      "VALIDATION_ERROR",
+      toListingSearchValidationDetails(result.error)
+    );
+  }
+
+  return result.data;
 }

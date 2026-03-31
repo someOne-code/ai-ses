@@ -281,6 +281,8 @@ Acceptable evidence:
 
 This is a conversation-quality review layer, not backend acceptance.
 
+Use the dedicated scenario pack in [voice-quality-acceptance.md](/Users/umut/Desktop/ai-ses/docs/voice-quality-acceptance.md) to decide whether this layer is actually closed.
+
 ### 2. Real Provider Acceptance
 
 After listing onboarding is in place, run a separate provider-facing verification pass.

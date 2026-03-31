@@ -87,13 +87,19 @@ export async function createApp(options: CreateAppOptions = {}) {
     {
       ...(options.showingRequestsService
         ? { service: options.showingRequestsService }
+        : {}),
+      ...(options.integrationsService
+        ? { integrationsService: options.integrationsService }
         : {})
     }
   );
   app.register(
     registerRetellRoutes,
     {
-      ...(options.retellService ? { service: options.retellService } : {})
+      ...(options.retellService ? { service: options.retellService } : {}),
+      ...(options.integrationsService
+        ? { integrationsService: options.integrationsService }
+        : {})
     }
   );
 

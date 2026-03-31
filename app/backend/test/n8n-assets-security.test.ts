@@ -25,6 +25,30 @@ async function readProjectOwnedWorkflowAssets() {
   );
 }
 
+async function readAllWorkflowAssets() {
+  const entries = await readdir(n8nDir);
+  const assetNames = entries.filter((entry) => entry.endsWith(".json"));
+
+  return Promise.all(
+    assetNames.map(async (name) => ({
+      name,
+      workflow: JSON.parse(
+        (await readFile(path.join(n8nDir, name), "utf8")).replace(/^\uFEFF/, "")
+      ) as {
+        id?: string;
+        versionId?: string;
+        meta?: Record<string, unknown> | null;
+        nodes?: unknown[];
+        connections?: Record<string, unknown>;
+      }
+    }))
+  );
+}
+
+function parseWorkflow(raw: string) {
+  return JSON.parse(raw) as Record<string, unknown>;
+}
+
 function getCallbackNodeNames(raw: string) {
   return [
     ...raw.matchAll(/"name": "(Send [^"]+ Result Callback|Send Failed Delivery Callback)"/g)
@@ -113,6 +137,30 @@ test("project-owned n8n workflows keep runtime verification guidance for live we
   assert.ok(runtimeVerification.includes("smoke:n8n-booking-workflow"));
 });
 
+test("project-owned n8n workflow assets stay import-safe and do not pin top-level workflow identity metadata", async () => {
+  const assets = await readProjectOwnedWorkflowAssets();
+
+  for (const asset of assets) {
+    const workflow = parseWorkflow(asset.raw);
+
+    assert.equal(
+      Object.hasOwn(workflow, "id"),
+      false,
+      `${asset.name} must not pin a top-level workflow id`
+    );
+    assert.equal(
+      Object.hasOwn(workflow, "versionId"),
+      false,
+      `${asset.name} must not pin a top-level workflow versionId`
+    );
+    assert.equal(
+      Object.hasOwn(workflow, "meta"),
+      false,
+      `${asset.name} must not pin top-level n8n instance metadata`
+    );
+  }
+});
+
 test("project-owned n8n callback workflows keep backend writeback non-fatal and explicit", async () => {
   const assets = await readProjectOwnedWorkflowAssets();
 
@@ -150,6 +198,37 @@ test("project-owned n8n callback workflows keep backend writeback non-fatal and 
       asset.raw.includes("Normalize Confirmed Callback Result") ||
         asset.raw.includes("Normalize Delivered Callback Result"),
       `${asset.name} must normalize callback results before responding`
+    );
+  }
+});
+
+test("workflow json assets omit instance-bound import metadata", async () => {
+  const assets = await readAllWorkflowAssets();
+
+  for (const asset of assets) {
+    if (!Array.isArray(asset.workflow.nodes) || !asset.workflow.connections) {
+      continue;
+    }
+
+    assert.equal(
+      Object.hasOwn(asset.workflow, "id"),
+      false,
+      `${asset.name} must not pin a top-level workflow id`
+    );
+    assert.equal(
+      Object.hasOwn(asset.workflow, "versionId"),
+      false,
+      `${asset.name} must not pin a top-level workflow versionId`
+    );
+    assert.equal(
+      asset.workflow.meta?.instanceId,
+      undefined,
+      `${asset.name} must not carry an instance-bound meta.instanceId`
+    );
+    assert.equal(
+      asset.workflow.meta?.templateCredsSetupCompleted,
+      undefined,
+      `${asset.name} must not carry import-state templateCredsSetupCompleted`
     );
   }
 });

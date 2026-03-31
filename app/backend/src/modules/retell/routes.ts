@@ -2,6 +2,11 @@ import type { FastifyPluginAsync } from "fastify";
 
 import { env } from "../../config/env.js";
 import { ok } from "../../lib/http.js";
+import {
+  createN8nBookingWorkflowDispatcherFromEnv
+} from "../integrations/dispatcher.js";
+import { createIntegrationsRepository } from "../integrations/repository.js";
+import { createIntegrationsService, type IntegrationsService } from "../integrations/service.js";
 import { createGeminiListingQueryEmbeddingGeneratorFromEnv } from "../listings/embeddings.js";
 import { createListingsRepository } from "../listings/repository.js";
 import { createListingsService } from "../listings/service.js";
@@ -12,12 +17,45 @@ import { createRetellService, type RetellService } from "./service.js";
 
 interface RetellRouteOptions {
   service?: RetellService;
+  integrationsService?: IntegrationsService;
+}
+
+declare module "fastify" {
+  interface FastifyRequest {
+    rawBody?: string;
+  }
 }
 
 export const registerRetellRoutes: FastifyPluginAsync<RetellRouteOptions> = async (
   app,
   options
 ) => {
+  const defaultJsonParser = app.getDefaultJsonParser("ignore", "ignore");
+
+  if (app.hasContentTypeParser("application/json")) {
+    app.removeContentTypeParser("application/json");
+  }
+
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string" },
+    (request, body, done) => {
+      const rawBody = typeof body === "string" ? body : body.toString("utf8");
+      request.rawBody = rawBody;
+      defaultJsonParser(request, rawBody, done);
+    }
+  );
+
+  const defaultBookingWorkflowDispatcher =
+    createN8nBookingWorkflowDispatcherFromEnv({ logger: app.log });
+  const integrationsService =
+    options.integrationsService ??
+    createIntegrationsService({
+      repository: createIntegrationsRepository(app.db),
+      ...(defaultBookingWorkflowDispatcher
+        ? { bookingWorkflowDispatcher: defaultBookingWorkflowDispatcher }
+        : {})
+    });
   const service =
     options.service ??
     createRetellService({
@@ -32,7 +70,10 @@ export const registerRetellRoutes: FastifyPluginAsync<RetellRouteOptions> = asyn
           : {})
       }),
       showingRequestsService: createShowingRequestsService(
-        createShowingRequestsRepository(app.db)
+        createShowingRequestsRepository(app.db),
+        {
+          ...(integrationsService ? { integrationsService } : {})
+        }
       )
     });
 
@@ -45,7 +86,8 @@ export const registerRetellRoutes: FastifyPluginAsync<RetellRouteOptions> = asyn
     return reply.send(
       await service.executeTool({
         signature,
-        body: request.body
+        body: request.body,
+        rawBody: request.rawBody ?? ""
       })
     );
   });
@@ -59,7 +101,8 @@ export const registerRetellRoutes: FastifyPluginAsync<RetellRouteOptions> = asyn
     return ok(
       await service.handleWebhook({
         signature,
-        body: request.body
+        body: request.body,
+        rawBody: request.rawBody ?? ""
       })
     );
   });

@@ -1,4 +1,5 @@
 import { AppError } from "../../lib/errors.js";
+import type { IntegrationsService } from "../integrations/service.js";
 
 import type { ShowingRequestsRepository } from "./repository.js";
 import type {
@@ -12,7 +13,10 @@ function toIsoString(value: Date): string {
 }
 
 export function createShowingRequestsService(
-  repository: ShowingRequestsRepository
+  repository: ShowingRequestsRepository,
+  options: {
+    integrationsService?: Pick<IntegrationsService, "dispatchShowingRequestCreated">;
+  } = {}
 ) {
   return {
     async createShowingRequest(
@@ -36,7 +40,7 @@ export function createShowingRequestsService(
         throw new AppError("Failed to create showing request.", 500);
       }
 
-      return {
+      const record = {
         id: showingRequest.id,
         officeId: showingRequest.officeId,
         listingId: showingRequest.listingId,
@@ -50,6 +54,20 @@ export function createShowingRequestsService(
         status: showingRequest.status,
         createdAt: toIsoString(showingRequest.createdAt)
       };
+
+      if (options.integrationsService) {
+        try {
+          await options.integrationsService.dispatchShowingRequestCreated({
+            officeId: record.officeId,
+            showingRequestId: record.id
+          });
+        } catch {
+          // Persistence already succeeded; downstream booking fan-out must not
+          // turn a stored showing request into a false creation failure.
+        }
+      }
+
+      return record;
     }
   };
 }

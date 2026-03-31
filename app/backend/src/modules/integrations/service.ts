@@ -5,7 +5,10 @@ import {
 } from "../retell/post-call-analysis.js";
 import { asPreferredTimeWindow } from "../showing-requests/types.js";
 
-import type { CrmWorkflowDispatcher } from "./dispatcher.js";
+import type {
+  BookingWorkflowDispatcher,
+  CrmWorkflowDispatcher
+} from "./dispatcher.js";
 import type { IntegrationsRepository } from "./repository.js";
 import {
   BOOKING_RESULT_CALLBACK_PATH,
@@ -30,6 +33,7 @@ function toIsoString(value: Date | null): string | null {
 
 type IntegrationsServiceOptions = {
   repository: IntegrationsRepository;
+  bookingWorkflowDispatcher?: BookingWorkflowDispatcher;
   crmWorkflowDispatcher?: CrmWorkflowDispatcher;
 };
 
@@ -162,6 +166,32 @@ function matchesRecordedCrmDeliveryCallback(
 export function createIntegrationsService(options: IntegrationsServiceOptions) {
   const repository = options.repository;
 
+  async function recordBookingDispatchFailure(input: {
+    officeId: string;
+    showingRequestId: string;
+    error: unknown;
+  }) {
+    const office = await repository.findOfficeContextById(input.officeId);
+
+    await repository.createAuditEvent({
+      tenantId: office?.tenantId ?? null,
+      officeId: input.officeId,
+      actorType: "backend",
+      actorId: null,
+      action: "booking_dispatch_failed",
+      payload: {
+        sourceAction: "showing_request_created",
+        showingRequestId: input.showingRequestId,
+        errorCode:
+          input.error instanceof AppError ? input.error.code : null,
+        error:
+          input.error instanceof Error
+            ? input.error.message
+            : "Unknown booking dispatch error."
+      }
+    });
+  }
+
   return {
     async getBookingWorkflowContract(
       params: BookingWorkflowContractParams
@@ -220,6 +250,36 @@ export function createIntegrationsService(options: IntegrationsServiceOptions) {
           secretEnvName: "N8N_BOOKING_CALLBACK_SECRET"
         }
       };
+    },
+
+    async dispatchShowingRequestCreated(
+      params: BookingWorkflowContractParams
+    ): Promise<void> {
+      if (!options.bookingWorkflowDispatcher) {
+        await recordBookingDispatchFailure({
+          officeId: params.officeId,
+          showingRequestId: params.showingRequestId,
+          error: new AppError(
+            "Booking workflow dispatch is unavailable.",
+            503,
+            "BOOKING_WORKFLOW_DISPATCH_UNAVAILABLE"
+          )
+        });
+
+        return;
+      }
+
+      try {
+        const contract = await this.getBookingWorkflowContract(params);
+
+        await options.bookingWorkflowDispatcher.dispatchBookingWorkflow(contract);
+      } catch (error) {
+        await recordBookingDispatchFailure({
+          officeId: params.officeId,
+          showingRequestId: params.showingRequestId,
+          error
+        });
+      }
     },
 
     async getCrmWebhookContract(

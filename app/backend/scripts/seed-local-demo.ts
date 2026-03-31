@@ -19,6 +19,7 @@ import {
   createListingSearchDocumentsRepository,
   createListingSearchDocumentsService
 } from "../src/modules/listings/search-documents.js";
+import { env } from "../src/config/env.js";
 
 export const LOCAL_DEMO_IDS = {
   tenantId: "11111111-1111-4111-8111-111111111111",
@@ -36,14 +37,33 @@ export const LOCAL_DEMO_IDS = {
   callLogId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 } as const;
 
-export const LOCAL_DEMO_CONNECTION_CONFIGS = {
-  booking: {
+function buildLocalDemoBookingConnectionConfig() {
+  const baseConfig = {
     workflowName: "ai-ses - Booking Flow",
-    availabilityUrl: "http://127.0.0.1:4010/availability",
-    bookingUrl: "http://127.0.0.1:4010/booking",
+    workflowSlug: "ai-ses-booking-flow",
+    triggerPath: "/webhook/ai-ses-booking-flow",
     durationMinutes: 30,
     confirmationDelaySeconds: 0
-  },
+  };
+
+  if (env.N8N_GOOGLE_CALENDAR_ID) {
+    return {
+      ...baseConfig,
+      provider: "google_calendar",
+      calendarId: env.N8N_GOOGLE_CALENDAR_ID,
+      cleanupCreatedEvent: false
+    };
+  }
+
+  return {
+    ...baseConfig,
+    availabilityUrl: "http://127.0.0.1:4010/availability",
+    bookingUrl: "http://127.0.0.1:4010/booking"
+  };
+}
+
+export const LOCAL_DEMO_CONNECTION_CONFIGS = {
+  booking: buildLocalDemoBookingConnectionConfig(),
   crm: {
     workflowName: "ai-ses - CRM Sync",
     triggerPath: "/webhook/ai-ses-crm-sync",
