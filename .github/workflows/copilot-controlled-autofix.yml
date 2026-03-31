@@ -1,0 +1,51 @@
+name: Copilot Controlled Autofix
+
+on:
+  issue_comment:
+    types:
+      - created
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Draft pull request number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: copilot-controlled-autofix-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  request-autofix:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '/copilot-autofix')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out base branch workflow files
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Request controlled Copilot autofix
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.issue.number }}
+          TRIGGER_ACTOR: ${{ github.actor }}
+          TRIGGER_AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+          TRIGGER_COMMENT_BODY: ${{ github.event.comment.body }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.id }}
+        run: node ./scripts/copilot-autofix.mjs
