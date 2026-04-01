@@ -19,6 +19,10 @@ import {
   createListingSearchDocumentsRepository,
   createListingSearchDocumentsService
 } from "../src/modules/listings/search-documents.js";
+import {
+  createGeminiListingEmbeddingGeneratorFromEnv,
+  type ListingEmbeddingGenerator
+} from "../src/modules/listings/embeddings.js";
 import { env } from "../src/config/env.js";
 
 export const LOCAL_DEMO_IDS = {
@@ -155,6 +159,43 @@ const DEMO_PROMPT_CONTENT = [
 
 const LOCAL_DEMO_LOCK_KEY = 328041;
 
+export type LocalDemoListingSearchMode = "lexical-only" | "semantic+lexical";
+
+interface LocalDemoSeedOutput {
+  log(message?: unknown, ...optionalParams: unknown[]): void;
+}
+
+interface LocalDemoSeedInput {
+  embeddingGenerator?: ListingEmbeddingGenerator;
+  output?: LocalDemoSeedOutput;
+}
+
+export function resolveLocalDemoListingSearchSeedSetup(input?: {
+  embeddingGenerator?: ListingEmbeddingGenerator;
+}): {
+  embeddingGenerator?: ListingEmbeddingGenerator;
+  mode: LocalDemoListingSearchMode;
+} {
+  if (input?.embeddingGenerator) {
+    return {
+      embeddingGenerator: input.embeddingGenerator,
+      mode: "semantic+lexical"
+    };
+  }
+
+  if (!env.GEMINI_API_KEY) {
+    return {
+      embeddingGenerator: undefined,
+      mode: "lexical-only"
+    };
+  }
+
+  return {
+    embeddingGenerator: createGeminiListingEmbeddingGeneratorFromEnv(),
+    mode: "semantic+lexical"
+  };
+}
+
 function shouldCleanup() {
   return process.argv.includes("--cleanup");
 }
@@ -223,7 +264,7 @@ export async function cleanupLocalDemoData() {
   });
 }
 
-export async function seedLocalDemoDataWithoutLock() {
+export async function seedLocalDemoDataWithoutLock(input?: LocalDemoSeedInput) {
   await db.transaction(async (tx) => {
     await tx
       .insert(tenants)
@@ -453,8 +494,16 @@ export async function seedLocalDemoDataWithoutLock() {
       });
   });
 
+  const listingSearchSeedSetup = resolveLocalDemoListingSearchSeedSetup({
+    embeddingGenerator: input?.embeddingGenerator
+  });
   const listingSearchDocumentsService = createListingSearchDocumentsService(
-    createListingSearchDocumentsRepository(db)
+    createListingSearchDocumentsRepository(db),
+    listingSearchSeedSetup.embeddingGenerator
+      ? {
+          embeddingGenerator: listingSearchSeedSetup.embeddingGenerator
+        }
+      : undefined
   );
 
   const seededSearchDocuments = [];
@@ -471,7 +520,9 @@ export async function seedLocalDemoDataWithoutLock() {
     });
   }
 
-  console.log(
+  const output = input?.output ?? console;
+
+  output.log(
     JSON.stringify(
       {
         ok: true,
@@ -518,7 +569,7 @@ export async function seedLocalDemoDataWithoutLock() {
         },
         listingSearchDocuments: {
           count: seededSearchDocuments.length,
-          mode: "lexical-only",
+          mode: listingSearchSeedSetup.mode,
           items: seededSearchDocuments
         }
       },

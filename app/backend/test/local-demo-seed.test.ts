@@ -4,23 +4,73 @@ import test from "node:test";
 import { asc, eq, sql } from "drizzle-orm";
 
 import { db } from "../src/db/client.js";
+import { env } from "../src/config/env.js";
+import { LISTING_SEARCH_EMBEDDING_DIMENSION } from "../src/db/schema/index.js";
 import {
   listingSearchDocuments,
   listings,
   offices
 } from "../src/db/schema/index.js";
+import type { ListingEmbeddingGenerator } from "../src/modules/listings/embeddings.js";
 import { createListingsRepository } from "../src/modules/listings/repository.js";
 import { createListingsService } from "../src/modules/listings/service.js";
 import {
   cleanupLocalDemoData,
   cleanupLocalDemoDataWithoutLock,
   LOCAL_DEMO_IDS,
+  resolveLocalDemoListingSearchSeedSetup,
   seedLocalDemoData,
   seedLocalDemoDataWithoutLock,
   withLocalDemoDataLock
 } from "../scripts/seed-local-demo.js";
 
 const listingsService = createListingsService(createListingsRepository(db));
+const shouldSeedEmbeddingsByDefault = Boolean(env.GEMINI_API_KEY);
+
+function createStubListingEmbeddingGenerator(): ListingEmbeddingGenerator {
+  return {
+    async generateDocumentEmbedding(input: string) {
+      const values = Array.from(
+        { length: LISTING_SEARCH_EMBEDDING_DIMENSION },
+        (_, index) => input.length + index
+      );
+
+      return {
+        values,
+        model: "stub-gemini-embedding-001"
+      };
+    }
+  };
+}
+
+async function seedDemoAndCaptureOutput(input?: {
+  embeddingGenerator?: ListingEmbeddingGenerator;
+}) {
+  let payloadText = "";
+
+  await seedLocalDemoDataWithoutLock({
+    embeddingGenerator: input?.embeddingGenerator,
+    output: {
+      log(message?: unknown) {
+        payloadText = String(message ?? "");
+      }
+    }
+  });
+
+  assert.notEqual(payloadText, "");
+
+  return JSON.parse(payloadText) as {
+    listingSearchDocuments: {
+      count: number;
+      mode: "lexical-only" | "semantic+lexical";
+      items: Array<{
+        listingId: string;
+        documentType: string;
+        hasEmbedding: boolean;
+      }>;
+    };
+  };
+}
 
 async function getDemoState() {
   const [office] = await db
@@ -63,9 +113,18 @@ async function getDemoState() {
 test("local demo seed materializes app-owned main search documents and cleanup stays coherent", async () => {
   await withLocalDemoDataLock(async () => {
     const hadSeedDataBefore = (await getDemoState()).officeExists;
+    const expectedHasEmbedding = shouldSeedEmbeddingsByDefault;
+    const expectedMode = expectedHasEmbedding
+      ? "semantic+lexical"
+      : "lexical-only";
+    const embeddingGenerator = expectedHasEmbedding
+      ? createStubListingEmbeddingGenerator()
+      : undefined;
 
     try {
-      await seedLocalDemoDataWithoutLock();
+      const firstSeedOutput = await seedDemoAndCaptureOutput({
+        embeddingGenerator
+      });
 
       const firstSeedState = await getDemoState();
 
@@ -84,11 +143,18 @@ test("local demo seed materializes app-owned main search documents and cleanup s
         LOCAL_DEMO_IDS.listingIds.map((listingId) => ({
           listingId,
           documentType: "main",
-          hasEmbedding: false
+          hasEmbedding: expectedHasEmbedding
         }))
       );
+      assert.equal(firstSeedOutput.listingSearchDocuments.count, 3);
+      assert.equal(firstSeedOutput.listingSearchDocuments.mode, expectedMode);
+      assert.deepEqual(firstSeedOutput.listingSearchDocuments.items, [
+        ...firstSeedState.searchDocuments
+      ]);
 
-      await seedLocalDemoDataWithoutLock();
+      const secondSeedOutput = await seedDemoAndCaptureOutput({
+        embeddingGenerator
+      });
 
       const secondSeedState = await getDemoState();
 
@@ -96,6 +162,11 @@ test("local demo seed materializes app-owned main search documents and cleanup s
       assert.deepEqual(
         secondSeedState.searchDocuments,
         firstSeedState.searchDocuments
+      );
+      assert.equal(secondSeedOutput.listingSearchDocuments.mode, expectedMode);
+      assert.deepEqual(
+        secondSeedOutput.listingSearchDocuments.items,
+        firstSeedOutput.listingSearchDocuments.items
       );
 
       const results = await listingsService.searchListings({
@@ -128,12 +199,23 @@ test("local demo seed materializes app-owned main search documents and cleanup s
   });
 });
 
+test("local demo seed setup resolves output mode coherently with GEMINI_API_KEY presence", () => {
+  const setup = resolveLocalDemoListingSearchSeedSetup();
+
+  assert.equal(setup.mode, shouldSeedEmbeddingsByDefault ? "semantic+lexical" : "lexical-only");
+  assert.equal(setup.embeddingGenerator !== undefined, shouldSeedEmbeddingsByDefault);
+});
+
 test("local demo seed resolves spoken DEMO IST 3401 to the canonical reference code", async () => {
   await withLocalDemoDataLock(async () => {
     const hadSeedDataBefore = (await getDemoState()).officeExists;
 
     try {
-      await seedLocalDemoDataWithoutLock();
+      await seedLocalDemoDataWithoutLock({
+        embeddingGenerator: shouldSeedEmbeddingsByDefault
+          ? createStubListingEmbeddingGenerator()
+          : undefined
+      });
 
       const listing = await listingsService.getListingByReference({
         officeId: LOCAL_DEMO_IDS.officeId,
