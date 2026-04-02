@@ -104,8 +104,12 @@ test("searchListingsDetailed preserves shortlist speech fields without widening 
     assert.equal(listing?.hasBalcony, true);
     assert.equal(listing?.hasParking, false);
     assert.equal(listing?.hasElevator, true);
+    assert.equal(listing?.matchSource, "structured");
+    assert.equal(listing?.approximate, false);
+    assert.equal(listing?.cosineDistance, null);
     assert.equal("floorNumber" in (listing ?? {}), false);
     assert.equal("addressText" in (listing ?? {}), false);
+    assert.equal("description" in (listing ?? {}), false);
   } finally {
     await cleanupFixture({
       tenantIds: [tenantId],
@@ -162,10 +166,25 @@ test("listing reference lookup resolves deterministic spoken spacing and hyphen 
       officeId,
       referenceCode: "DEMO \u0130ST 3401"
     });
+    const bareSuffix = await listingsService.getListingByReference({
+      officeId,
+      referenceCode: "3401"
+    });
+    const segmentedSuffix = await listingsService.getListingByReference({
+      officeId,
+      referenceCode: "34 01"
+    });
+    const spokenSuffix = await listingsService.getListingByReference({
+      officeId,
+      referenceCode: "otuz dort sifir bir"
+    });
 
     assert.equal(spaced.referenceCode, "DEMO-IST-3401");
     assert.equal(lowercase.referenceCode, "DEMO-IST-3401");
     assert.equal(dotted.referenceCode, "DEMO-IST-3401");
+    assert.equal(bareSuffix.referenceCode, "DEMO-IST-3401");
+    assert.equal(segmentedSuffix.referenceCode, "DEMO-IST-3401");
+    assert.equal(spokenSuffix.referenceCode, "DEMO-IST-3401");
   } finally {
     await cleanupFixture({
       tenantIds: [tenantId],
@@ -420,6 +439,9 @@ test("hybrid lexical search uses main documents, preserves office plus active is
     assert.equal(results[0]?.referenceCode, `REF-${matchingListingId.slice(0, 8)}`);
     assert.equal(results[0]?.status, "active");
     assert.equal(results[0]?.price, 55000);
+    assert.equal(results[0]?.approximate, true);
+    assert.equal(results[0]?.matchSource, "lexical");
+    assert.equal(results[0]?.cosineDistance, null);
   } finally {
     await cleanupFixture({
       tenantIds: [tenantAId, tenantBId],
@@ -860,19 +882,27 @@ test("hybrid search returns vector candidates when lexical search misses", async
   ]);
 
   try {
-    const results = await vectorSearchService.searchListings({
+    const searchResult = await vectorSearchService.searchListingsDetailed({
       officeId: officeAId,
       queryText: "ulasim kolay aile evi",
       searchMode: "hybrid",
       limit: 5
     });
+    const results = searchResult.listings;
 
     assert.deepEqual(
       results.map((listing) => listing.id),
       [vectorMatchListingId]
     );
+    assert.equal(searchResult.matchInterpretation, "hybrid_candidate");
     assert.equal(results[0]?.status, "active");
     assert.equal(results[0]?.referenceCode, `REF-${vectorMatchListingId.slice(0, 8)}`);
+    assert.equal(results[0]?.matchSource, "vector");
+    assert.equal(results[0]?.approximate, true);
+    assert.ok(
+      typeof results[0]?.cosineDistance === "number" &&
+        Number.isFinite(results[0]?.cosineDistance)
+    );
   } finally {
     await cleanupFixture({
       tenantIds: [tenantAId, tenantBId],
@@ -887,7 +917,7 @@ test("hybrid search returns vector candidates when lexical search misses", async
   }
 });
 
-test("hybrid search combines lexical and vector candidates without duplication", async () => {
+test("hybrid search keeps metro/family queries on candidates with matching lexical evidence", async () => {
   const tenantId = randomUUID();
   const officeId = randomUUID();
   const lexicalListingId = randomUUID();
@@ -977,17 +1007,21 @@ test("hybrid search combines lexical and vector candidates without duplication",
   ]);
 
   try {
-    const results = await combinedSearchService.searchListings({
+    const searchResult = await combinedSearchService.searchListingsDetailed({
       officeId,
       queryText: "metroya yakin aile icin uygun",
       searchMode: "hybrid",
       limit: 5
     });
+    const results = searchResult.listings;
 
     assert.deepEqual(
       results.map((listing) => listing.id),
-      [lexicalListingId, vectorOnlyListingId]
+      [lexicalListingId]
     );
+    assert.equal(searchResult.matchInterpretation, "hybrid_candidate");
+    assert.equal(results[0]?.matchSource, "hybrid");
+    assert.equal(results[0]?.approximate, true);
   } finally {
     await cleanupFixture({
       tenantIds: [tenantId],
@@ -997,7 +1031,7 @@ test("hybrid search combines lexical and vector candidates without duplication",
   }
 });
 
-test("hybrid search reranks lexical and vector candidates with reciprocal rank fusion", async () => {
+test("hybrid search reranks lexical candidates while excluding unrelated vector-only metro/family drift", async () => {
   const tenantId = randomUUID();
   const officeId = randomUUID();
   const lexicalAndVectorListingId = randomUUID();
@@ -1115,17 +1149,21 @@ test("hybrid search reranks lexical and vector candidates with reciprocal rank f
   ]);
 
   try {
-    const results = await rerankedSearchService.searchListings({
+    const searchResult = await rerankedSearchService.searchListingsDetailed({
       officeId,
       queryText: "metroya yakin aile icin uygun",
       searchMode: "hybrid",
       limit: 5
     });
+    const results = searchResult.listings;
 
     assert.deepEqual(
       results.map((listing) => listing.id),
-      [lexicalAndVectorListingId, vectorOnlyListingId, lexicalOnlyListingId]
+      [lexicalAndVectorListingId, lexicalOnlyListingId]
     );
+    assert.equal(searchResult.matchInterpretation, "hybrid_candidate");
+    assert.equal(results[0]?.matchSource, "hybrid");
+    assert.equal(results[1]?.matchSource, "lexical");
   } finally {
     await cleanupFixture({
       tenantIds: [tenantId],
@@ -1135,6 +1173,254 @@ test("hybrid search reranks lexical and vector candidates with reciprocal rank f
         lexicalOnlyListingId,
         vectorOnlyListingId
       ]
+    });
+  }
+});
+
+test("hybrid search accepts vector-only candidates above the old cutoff when they remain within post-fusion acceptance", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const vectorCandidateId = randomUUID();
+  const vectorEdgeSearchService = createListingsService(
+    createListingsRepository(db),
+    {
+      queryEmbeddingGenerator: {
+        async generateQueryEmbedding(input) {
+          assert.equal(input, "ulasimi kolay daire");
+
+          return {
+            values: createEmbedding([0, 1], [1, 0]),
+            model: "gemini-embedding-001"
+          };
+        }
+      }
+    }
+  );
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Vector Threshold Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Vector Threshold Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values({
+    id: vectorCandidateId,
+    officeId,
+    referenceCode: `REF-${vectorCandidateId.slice(0, 8)}`,
+    title: "Vector Threshold Candidate",
+    description: "Vector threshold fixture.",
+    propertyType: "apartment",
+    listingType: "rent",
+    status: "active",
+    price: "70000.00",
+    currency: "TRY",
+    bedrooms: "2",
+    bathrooms: "1",
+    netM2: "100.00",
+    district: "Kadikoy",
+    neighborhood: "Moda"
+  });
+  await db.insert(listingSearchDocuments).values({
+    officeId,
+    listingId: vectorCandidateId,
+    documentType: "main",
+    content: "Tamamen alakasiz lexical icerik.",
+    embedding: createEmbedding([0, 0.6], [1, 0.8]),
+    embeddingModel: "gemini-embedding-001",
+    metadata: { section: "main" }
+  });
+
+  try {
+    const searchResult = await vectorEdgeSearchService.searchListingsDetailed({
+      officeId,
+      queryText: "ulasimi kolay daire",
+      searchMode: "hybrid",
+      limit: 5
+    });
+    const listing = searchResult.listings[0];
+
+    assert.equal(searchResult.matchInterpretation, "hybrid_candidate");
+    assert.equal(searchResult.listings.length, 1);
+    assert.equal(listing?.id, vectorCandidateId);
+    assert.equal(listing?.matchSource, "vector");
+    assert.equal(listing?.approximate, true);
+    assert.ok(
+      typeof listing?.cosineDistance === "number" &&
+        listing.cosineDistance > 0.3 &&
+        listing.cosineDistance <= 0.42
+    );
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [vectorCandidateId]
+    });
+  }
+});
+
+test("hybrid search rejects vector-only candidates when distance exceeds post-fusion acceptance", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const vectorCandidateId = randomUUID();
+  const vectorEdgeSearchService = createListingsService(
+    createListingsRepository(db),
+    {
+      queryEmbeddingGenerator: {
+        async generateQueryEmbedding(input) {
+          assert.equal(input, "ulasimi kolay daire");
+
+          return {
+            values: createEmbedding([0, 1], [1, 0]),
+            model: "gemini-embedding-001"
+          };
+        }
+      }
+    }
+  );
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Vector Rejection Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Vector Rejection Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values({
+    id: vectorCandidateId,
+    officeId,
+    referenceCode: `REF-${vectorCandidateId.slice(0, 8)}`,
+    title: "Vector Rejection Candidate",
+    description: "Vector rejection fixture.",
+    propertyType: "apartment",
+    listingType: "rent",
+    status: "active",
+    price: "73000.00",
+    currency: "TRY",
+    bedrooms: "2",
+    bathrooms: "1",
+    netM2: "102.00",
+    district: "Kadikoy",
+    neighborhood: "Moda"
+  });
+  await db.insert(listingSearchDocuments).values({
+    officeId,
+    listingId: vectorCandidateId,
+    documentType: "main",
+    content: "Tamamen alakasiz lexical icerik.",
+    embedding: createEmbedding([0, 0.5], [1, 0.8660254]),
+    embeddingModel: "gemini-embedding-001",
+    metadata: { section: "main" }
+  });
+
+  try {
+    const searchResult = await vectorEdgeSearchService.searchListingsDetailed({
+      officeId,
+      queryText: "ulasimi kolay daire",
+      searchMode: "hybrid",
+      limit: 5
+    });
+
+    assert.equal(searchResult.matchInterpretation, "no_match");
+    assert.deepEqual(searchResult.listings, []);
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [vectorCandidateId]
+    });
+  }
+});
+
+test("hybrid search keeps lexical-backed candidates even when vector distance is above acceptance", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const listingId = randomUUID();
+  const lexicalPriorityService = createListingsService(
+    createListingsRepository(db),
+    {
+      queryEmbeddingGenerator: {
+        async generateQueryEmbedding(input) {
+          assert.equal(input, "metroya yakin");
+
+          return {
+            values: createEmbedding([0, 1], [1, 0]),
+            model: "gemini-embedding-001"
+          };
+        }
+      }
+    }
+  );
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Lexical Priority Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Lexical Priority Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values({
+    id: listingId,
+    officeId,
+    referenceCode: `REF-${listingId.slice(0, 8)}`,
+    title: "Lexical Priority Listing",
+    description: "Lexical priority fixture.",
+    propertyType: "apartment",
+    listingType: "rent",
+    status: "active",
+    price: "76000.00",
+    currency: "TRY",
+    bedrooms: "2",
+    bathrooms: "1",
+    netM2: "105.00",
+    district: "Kadikoy",
+    neighborhood: "Moda"
+  });
+  await db.insert(listingSearchDocuments).values({
+    officeId,
+    listingId,
+    documentType: "main",
+    content: "Metroya yakin daire.",
+    embedding: createEmbedding([0, 0.5], [1, 0.8660254]),
+    embeddingModel: "gemini-embedding-001",
+    metadata: { section: "main" }
+  });
+
+  try {
+    const searchResult = await lexicalPriorityService.searchListingsDetailed({
+      officeId,
+      queryText: "metroya yakin",
+      searchMode: "hybrid",
+      limit: 5
+    });
+    const listing = searchResult.listings[0];
+
+    assert.equal(searchResult.matchInterpretation, "hybrid_candidate");
+    assert.equal(searchResult.listings.length, 1);
+    assert.equal(listing?.id, listingId);
+    assert.equal(listing?.matchSource, "hybrid");
+    assert.equal(listing?.approximate, true);
+    assert.ok(
+      typeof listing?.cosineDistance === "number" &&
+        listing.cosineDistance > 0.42
+    );
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [listingId]
     });
   }
 });
@@ -1201,15 +1487,277 @@ test("GET listings search uses the backend-owned vector path when hybrid query e
     });
 
     assert.equal(response.statusCode, 200);
-    assert.deepEqual(
-      response.json().data.map((listing: { id: string }) => listing.id),
-      [vectorListingId]
-    );
+    const payload = response.json().data as Array<Record<string, unknown>>;
+
+    assert.deepEqual(payload.map((listing) => listing.id), [vectorListingId]);
+    assert.equal("matchSource" in (payload[0] ?? {}), false);
+    assert.equal("approximate" in (payload[0] ?? {}), false);
+    assert.equal("cosineDistance" in (payload[0] ?? {}), false);
   } finally {
     await cleanupFixture({
       tenantIds: [tenantId],
       officeIds: [officeId],
       listingIds: [vectorListingId]
+    });
+  }
+});
+
+test("hybrid search does not treat generic transit wording as a metro-proximity match", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const genericTransitListingId = randomUUID();
+  const metrobusListingId = randomUUID();
+  const metroIntentSearchService = createListingsService(
+    createListingsRepository(db),
+    {
+      queryEmbeddingGenerator: {
+        async generateQueryEmbedding(input) {
+          assert.equal(input, "metroya yakin");
+
+          return {
+            values: createEmbedding([0, 1], [1, 0]),
+            model: "gemini-embedding-001"
+          };
+        }
+      }
+    }
+  );
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Metro Intent Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Metro Intent Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values([
+    {
+      id: genericTransitListingId,
+      officeId,
+      referenceCode: `REF-${genericTransitListingId.slice(0, 8)}`,
+      title: "Generic Transit Links Listing",
+      description: "Short walking distance to transit links and the seaside.",
+      propertyType: "apartment",
+      listingType: "rent",
+      status: "active",
+      price: "65000.00",
+      currency: "TRY",
+      bedrooms: "2",
+      bathrooms: "1",
+      netM2: "95.00",
+      district: "Kadikoy",
+      neighborhood: "Moda"
+    },
+    {
+      id: metrobusListingId,
+      officeId,
+      referenceCode: `REF-${metrobusListingId.slice(0, 8)}`,
+      title: "Metrobus Access Listing",
+      description: "Easy metrobus access for weekday commuting.",
+      propertyType: "apartment",
+      listingType: "sale",
+      status: "active",
+      price: "12500000.00",
+      currency: "TRY",
+      bedrooms: "3",
+      bathrooms: "2",
+      netM2: "145.00",
+      district: "Uskudar",
+      neighborhood: "Acibadem",
+      hasParking: true,
+      hasElevator: true
+    }
+  ]);
+  await db.insert(listingSearchDocuments).values([
+    {
+      officeId,
+      listingId: genericTransitListingId,
+      documentType: "main",
+      content: "Short walking distance to transit links and the seaside.",
+      embedding: createEmbedding([0, 1], [1, 0]),
+      embeddingModel: "gemini-embedding-001",
+      metadata: { section: "main" }
+    },
+    {
+      officeId,
+      listingId: metrobusListingId,
+      documentType: "main",
+      content: "Easy metrobus access for weekday commuting.",
+      embedding: createEmbedding([0, 1], [1, 0]),
+      embeddingModel: "gemini-embedding-001",
+      metadata: { section: "main" }
+    }
+  ]);
+
+  try {
+    const searchResult = await metroIntentSearchService.searchListingsDetailed({
+      officeId,
+      queryText: "metroya yakin",
+      searchMode: "hybrid",
+      limit: 5
+    });
+
+    assert.equal(searchResult.matchInterpretation, "hybrid_candidate");
+    assert.deepEqual(
+      searchResult.listings.map((listing) => listing.id),
+      [metrobusListingId]
+    );
+    assert.equal(searchResult.listings[0]?.matchSource, "vector");
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [genericTransitListingId, metrobusListingId]
+    });
+  }
+});
+
+test("hybrid search filters small homes out of family-friendly approximation results", async () => {
+  const tenantId = randomUUID();
+  const officeId = randomUUID();
+  const compactListingId = randomUUID();
+  const familyApartmentId = randomUUID();
+  const duplexListingId = randomUUID();
+  const familyIntentSearchService = createListingsService(
+    createListingsRepository(db),
+    {
+      queryEmbeddingGenerator: {
+        async generateQueryEmbedding(input) {
+          assert.equal(input, "aileye uygun");
+
+          return {
+            values: createEmbedding([0, 1], [1, 0]),
+            model: "gemini-embedding-001"
+          };
+        }
+      }
+    }
+  );
+
+  await db.insert(tenants).values({
+    id: tenantId,
+    name: `Family Intent Tenant ${tenantId}`
+  });
+  await db.insert(offices).values({
+    id: officeId,
+    tenantId,
+    name: `Family Intent Office ${officeId}`,
+    timezone: "Europe/Istanbul",
+    status: "active"
+  });
+  await db.insert(listings).values([
+    {
+      id: compactListingId,
+      officeId,
+      referenceCode: `REF-${compactListingId.slice(0, 8)}`,
+      title: "Compact Rental Listing",
+      description: "Bright apartment with balcony.",
+      propertyType: "apartment",
+      listingType: "rent",
+      status: "active",
+      price: "65000.00",
+      currency: "TRY",
+      bedrooms: "2",
+      bathrooms: "1",
+      netM2: "95.00",
+      district: "Kadikoy",
+      neighborhood: "Moda",
+      hasElevator: true
+    },
+    {
+      id: familyApartmentId,
+      officeId,
+      referenceCode: `REF-${familyApartmentId.slice(0, 8)}`,
+      title: "Large Apartment Listing",
+      description: "Large family-friendly apartment with parking.",
+      propertyType: "apartment",
+      listingType: "sale",
+      status: "active",
+      price: "12500000.00",
+      currency: "TRY",
+      bedrooms: "3",
+      bathrooms: "2",
+      netM2: "145.00",
+      district: "Uskudar",
+      neighborhood: "Acibadem",
+      hasParking: true,
+      hasElevator: true
+    },
+    {
+      id: duplexListingId,
+      officeId,
+      referenceCode: `REF-${duplexListingId.slice(0, 8)}`,
+      title: "Large Duplex Listing",
+      description: "Flexible family living layout with private entrance and parking.",
+      propertyType: "duplex",
+      listingType: "sale",
+      status: "active",
+      price: "24500000.00",
+      currency: "TRY",
+      bedrooms: "4",
+      bathrooms: "3",
+      netM2: "210.00",
+      district: "Kadikoy",
+      neighborhood: "Fenerbahce",
+      hasParking: true
+    }
+  ]);
+  await db.insert(listingSearchDocuments).values([
+    {
+      officeId,
+      listingId: compactListingId,
+      documentType: "main",
+      content: "Bright apartment with balcony.",
+      embedding: createEmbedding([0, 1], [1, 0]),
+      embeddingModel: "gemini-embedding-001",
+      metadata: { section: "main" }
+    },
+    {
+      officeId,
+      listingId: familyApartmentId,
+      documentType: "main",
+      content: "Large family-friendly apartment with parking.",
+      embedding: createEmbedding([0, 1], [1, 0]),
+      embeddingModel: "gemini-embedding-001",
+      metadata: { section: "main" }
+    },
+    {
+      officeId,
+      listingId: duplexListingId,
+      documentType: "main",
+      content: "Flexible family living layout with private entrance and parking.",
+      embedding: createEmbedding([0, 1], [1, 0]),
+      embeddingModel: "gemini-embedding-001",
+      metadata: { section: "main" }
+    }
+  ]);
+
+  try {
+    const searchResult = await familyIntentSearchService.searchListingsDetailed({
+      officeId,
+      queryText: "aileye uygun",
+      searchMode: "hybrid",
+      limit: 5
+    });
+
+    assert.equal(searchResult.matchInterpretation, "hybrid_candidate");
+    assert.deepEqual(
+      searchResult.listings.map((listing) => listing.id),
+      [familyApartmentId, duplexListingId]
+    );
+    assert.equal(
+      searchResult.listings.some((listing) => listing.id === compactListingId),
+      false
+    );
+  } finally {
+    await cleanupFixture({
+      tenantIds: [tenantId],
+      officeIds: [officeId],
+      listingIds: [compactListingId, familyApartmentId, duplexListingId]
     });
   }
 });
