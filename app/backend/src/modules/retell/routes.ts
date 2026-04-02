@@ -9,6 +9,7 @@ import { createIntegrationsRepository } from "../integrations/repository.js";
 import { createIntegrationsService, type IntegrationsService } from "../integrations/service.js";
 import { createGeminiListingQueryEmbeddingGeneratorFromEnv } from "../listings/embeddings.js";
 import { createListingsRepository } from "../listings/repository.js";
+import { createGeminiListingSearchRouterFromEnv } from "../listings/router.js";
 import { createListingsService } from "../listings/service.js";
 import { createShowingRequestsRepository } from "../showing-requests/repository.js";
 import { createShowingRequestsService } from "../showing-requests/service.js";
@@ -65,7 +66,8 @@ export const registerRetellRoutes: FastifyPluginAsync<RetellRouteOptions> = asyn
         ...(env.GEMINI_API_KEY
           ? {
               queryEmbeddingGenerator:
-                createGeminiListingQueryEmbeddingGeneratorFromEnv()
+                createGeminiListingQueryEmbeddingGeneratorFromEnv(),
+              searchRouter: createGeminiListingSearchRouterFromEnv()
             }
           : {})
       }),

@@ -4,6 +4,7 @@ import {
   eq,
   gte,
   lte,
+  notInArray,
   or,
   sql,
   type SQL
@@ -19,18 +20,39 @@ import {
 import type {
   ListingByReferenceParams,
   ListingSearchDocumentRefreshParams,
+  ListingSearchRetrievalControls,
+  SearchAnchorTerm,
+  SearchNegatedTerm,
   SearchListingsFilters,
-  ListingSearchMatchInterpretation
+  ListingSearchMatchInterpretation,
+  ListingSearchMatchSource
 } from "./types.js";
 
 const MAIN_LISTING_SEARCH_DOCUMENT_TYPE = "main" as const;
-const MAX_VECTOR_COSINE_DISTANCE = 0.3;
+const MAX_VECTOR_ACCEPTANCE_COSINE_DISTANCE = 0.42;
+const VECTOR_CANDIDATE_POOL_MIN = 10;
+const VECTOR_CANDIDATE_POOL_MULTIPLIER = 3;
 const HYBRID_RRF_K = 50;
 const REFERENCE_CODE_NORMALIZATION_SOURCE =
   "\u00c7\u011e\u0130\u00d6\u015e\u00dc\u00c2\u00ce\u00db -_./!";
 const REFERENCE_CODE_NORMALIZATION_TARGET = "CGIOSUAIU";
 const SEARCH_NORMALIZATION_SOURCE = "çğıöşüâîû";
 const SEARCH_NORMALIZATION_TARGET = "cgiosuaiu";
+const SEARCH_ANCHOR_ALIAS_SETS = {
+  metro: [
+    "metro",
+    "metrobus",
+    "metrobüs",
+    "marmaray",
+    "tramvay"
+  ],
+  avm: ["avm", "alisveris merkezi", "alışveriş merkezi", "alisveris", "mall"],
+  otoyol: ["otoyol", "otoban", "e5", "e-5", "tem"],
+  marmaray: ["marmaray"],
+  tramvay: ["tramvay"],
+  park: ["park"],
+  deniz: ["deniz", "sahil", "kiyi", "kıyı"]
+} as const satisfies Record<string, readonly string[]>;
 const SPOKEN_REFERENCE_DIGIT_MAP = new Map<string, string>([
   ["SIFIR", "0"],
   ["BIR", "1"],
@@ -64,6 +86,7 @@ const listingSearchSelection = {
   id: listings.id,
   referenceCode: listings.referenceCode,
   title: listings.title,
+  description: listings.description,
   listingType: listings.listingType,
   propertyType: listings.propertyType,
   price: listings.price,
@@ -71,11 +94,59 @@ const listingSearchSelection = {
   bedrooms: listings.bedrooms,
   bathrooms: listings.bathrooms,
   netM2: listings.netM2,
+  buildingAge: listings.buildingAge,
+  dues: listings.dues,
+  hasBalcony: listings.hasBalcony,
+  hasParking: listings.hasParking,
+  hasElevator: listings.hasElevator,
   district: listings.district,
   neighborhood: listings.neighborhood,
   status: listings.status,
   createdAt: listings.createdAt
 };
+
+interface ListingSearchSelectionRow {
+  id: string;
+  referenceCode: string;
+  title: string;
+  description: string | null;
+  listingType: string | null;
+  propertyType: string | null;
+  price: string | null;
+  currency: string;
+  bedrooms: string | null;
+  bathrooms: string | null;
+  netM2: string | null;
+  buildingAge: string | null;
+  dues: string | null;
+  hasBalcony: boolean | null;
+  hasParking: boolean | null;
+  hasElevator: boolean | null;
+  district: string | null;
+  neighborhood: string | null;
+  status: string;
+  createdAt: Date;
+}
+
+interface HybridVectorCandidate extends ListingSearchSelectionRow {
+  cosineDistance: number;
+}
+
+interface ListingSearchCandidate extends ListingSearchSelectionRow {
+  matchSource: ListingSearchMatchSource;
+  approximate: boolean;
+  cosineDistance: number | null;
+}
+
+interface SearchIntentHints {
+  requiredAnchors: string[];
+}
+
+interface NormalizedListingSearchRetrievalControls {
+  mustAnchorTerms: SearchAnchorTerm[];
+  negatedTerms: SearchNegatedTerm[];
+  viewedListingIds: string[];
+}
 
 const listingDetailSelection = {
   id: listings.id,
@@ -305,14 +376,19 @@ function buildReferenceLookupPlan(value: string) {
   const tokens = tokenizeListingReferenceCode(value);
   const transcriptPreserved = tokens.join("");
   const canonicalized = canonicalizeListingReferenceCode(value);
+  const suffixFallbackAllowed =
+    tokens.length > 0 &&
+    tokens.every((token) => isSpokenReferenceNumberToken(token));
   const exactCandidates = [...new Set([transcriptPreserved, canonicalized])]
     .filter((candidate) => candidate !== "");
 
   return {
     exactCandidates,
     numericSuffix:
-      numericReferenceSuffix(canonicalized) ??
-      numericReferenceSuffix(transcriptPreserved)
+      suffixFallbackAllowed
+        ? numericReferenceSuffix(canonicalized) ??
+          numericReferenceSuffix(transcriptPreserved)
+        : null
   };
 }
 
@@ -329,11 +405,18 @@ function normalizedTextEquals(
   return sql`translate(lower(${column}), ${SEARCH_NORMALIZATION_SOURCE}, ${SEARCH_NORMALIZATION_TARGET}) = translate(lower(${value}), ${SEARCH_NORMALIZATION_SOURCE}, ${SEARCH_NORMALIZATION_TARGET})`;
 }
 
-function buildStructuredConditions(filters: SearchListingsFilters): SQL[] {
+function buildStructuredConditions(
+  filters: SearchListingsFilters,
+  viewedListingIds?: string[]
+): SQL[] {
   const conditions: SQL[] = [
     eq(listings.officeId, filters.officeId),
     eq(listings.status, "active")
   ];
+
+  if (viewedListingIds && viewedListingIds.length > 0) {
+    conditions.push(notInArray(listings.id, viewedListingIds));
+  }
 
   if (filters.district) {
     conditions.push(normalizedTextEquals(listings.district, filters.district));
@@ -380,91 +463,326 @@ function buildStructuredConditions(filters: SearchListingsFilters): SQL[] {
   return conditions;
 }
 
+function buildRetrievalControls(
+  input?: ListingSearchRetrievalControls
+): NormalizedListingSearchRetrievalControls {
+  return {
+    mustAnchorTerms: input?.mustAnchorTerms ?? [],
+    negatedTerms: input?.negatedTerms ?? [],
+    viewedListingIds: input?.viewedListingIds ?? []
+  };
+}
+
+function dedupeAnchorCanonicalTerms(
+  input: Array<SearchAnchorTerm | SearchNegatedTerm>
+): string[] {
+  const canonicals = new Set<string>();
+
+  for (const term of input) {
+    const canonical = normalizeSearchText(term.canonical);
+
+    if (canonical !== "") {
+      canonicals.add(canonical);
+    }
+  }
+
+  return [...canonicals];
+}
+
+function resolveAnchorAliases(canonical: string): string[] {
+  const aliasSet = SEARCH_ANCHOR_ALIAS_SETS[canonical as keyof typeof SEARCH_ANCHOR_ALIAS_SETS];
+
+  if (!aliasSet) {
+    return [canonical];
+  }
+
+  return [...new Set(aliasSet.map((alias) => alias.trim()).filter((alias) => alias !== ""))];
+}
+
+function toAnchorTsqueryClause(alias: string): string | null {
+  const tokens = alias
+    .toLowerCase()
+    .replace(/[':&|!()<>]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/g)
+    .map((token) => token.trim())
+    .filter((token) => token !== "");
+
+  if (tokens.length === 0) {
+    return null;
+  }
+
+  return tokens.map((token) => `${token}:*`).join(" <-> ");
+}
+
+function buildAnchorTsqueryText(aliases: string[]): string | null {
+  const clauses = aliases
+    .map((alias) => toAnchorTsqueryClause(alias))
+    .filter((clause): clause is string => clause !== null);
+
+  if (clauses.length === 0) {
+    return null;
+  }
+
+  return clauses.join(" | ");
+}
+
+function buildAnchorContentMatchCondition(aliases: string[]): SQL {
+  const queryText = buildAnchorTsqueryText(aliases);
+
+  if (!queryText) {
+    return sql`false`;
+  }
+
+  const tsQuery = sql`to_tsquery(${LISTING_SEARCH_TSVECTOR_CONFIG}, ${queryText})`;
+
+  return sql`${listingSearchDocuments.contentTsv} @@ ${tsQuery}`;
+}
+
+function buildDocumentRetrievalConditions(input: {
+  officeId: string;
+  retrievalControls: NormalizedListingSearchRetrievalControls;
+}): SQL[] {
+  const conditions: SQL[] = [
+    eq(listingSearchDocuments.officeId, input.officeId),
+    eq(listingSearchDocuments.documentType, MAIN_LISTING_SEARCH_DOCUMENT_TYPE)
+  ];
+  const positiveCanonicals = dedupeAnchorCanonicalTerms(
+    input.retrievalControls.mustAnchorTerms
+  );
+  const negativeCanonicals = dedupeAnchorCanonicalTerms(
+    input.retrievalControls.negatedTerms
+  );
+
+  for (const canonical of positiveCanonicals) {
+    const aliases = resolveAnchorAliases(canonical);
+
+    if (aliases.length === 0) {
+      continue;
+    }
+
+    conditions.push(buildAnchorContentMatchCondition(aliases));
+  }
+
+  for (const canonical of negativeCanonicals) {
+    const aliases = resolveAnchorAliases(canonical);
+
+    if (aliases.length === 0) {
+      continue;
+    }
+
+    conditions.push(sql`not (${buildAnchorContentMatchCondition(aliases)})`);
+  }
+
+  return conditions;
+}
+
+function normalizeSearchText(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[çğıöşüâîû]/g, (character) => {
+      const index = SEARCH_NORMALIZATION_SOURCE.indexOf(character);
+      return index >= 0 ? SEARCH_NORMALIZATION_TARGET[index]! : character;
+    })
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function analyzeSearchIntent(queryText: string): SearchIntentHints {
+  const normalized = normalizeSearchText(queryText);
+  const tokens = normalized.split(/\s+/g).filter((token) => token !== "");
+  const anchors = new Set<string>();
+  const patternTokens = new Set([
+    "yakin",
+    "uygun",
+    "icin",
+    "gore",
+    "gibi",
+    "bana",
+    "ev",
+    "evi",
+    "daire",
+    "konut",
+    "olan",
+    "var",
+    "mi",
+    "mı",
+    "mu",
+    "mü"
+  ]);
+
+  for (const token of tokens) {
+    if (token === "yakin" || token === "uygun") {
+      continue;
+    }
+
+    if (normalized.includes(`${token} yakin`) || normalized.includes(`${token} uygun`)) {
+      const anchor = token
+        .replace(/(ye|ya|e|a|de|da|te|ta)$/u, "")
+        .trim();
+
+      if (anchor !== "" && !patternTokens.has(anchor)) {
+        anchors.add(anchor);
+      }
+    }
+  }
+
+  return {
+    requiredAnchors: [...anchors]
+  };
+}
+
+function buildCandidateSearchText(candidate: ListingSearchSelectionRow): string {
+  return normalizeSearchText(
+    [
+      candidate.title,
+      candidate.description,
+      candidate.district,
+      candidate.neighborhood
+    ]
+      .filter((part): part is string => typeof part === "string" && part.trim() !== "")
+      .join(" ")
+  );
+}
+
+function candidateSupportsIntent(
+  candidate: ListingSearchSelectionRow,
+  lexicalRank: number | null,
+  hints: SearchIntentHints
+): boolean {
+  if (hints.requiredAnchors.length === 0) {
+    return true;
+  }
+
+  if (lexicalRank !== null) {
+    return true;
+  }
+
+  const candidateText = buildCandidateSearchText(candidate);
+  const anchorAliases = new Map<string, string[]>([
+    ["aile", ["aile", "family"]],
+    ["metro", ["metro", "metrobus"]]
+  ]);
+
+  return hints.requiredAnchors.some((anchor) => {
+    const aliases = anchorAliases.get(anchor) ?? [anchor];
+    return aliases.some((alias) => candidateText.includes(alias));
+  });
+}
+
 export function createListingsRepository(db: Database) {
+  function toStructuredCandidate(
+    listing: ListingSearchSelectionRow
+  ): ListingSearchCandidate {
+    return {
+      ...listing,
+      matchSource: "structured",
+      approximate: false,
+      cosineDistance: null
+    };
+  }
+
+  function toLexicalCandidate(
+    listing: ListingSearchSelectionRow
+  ): ListingSearchSelectionRow {
+    return listing;
+  }
+
+  function buildVectorCandidateLimit(limit: number): number {
+    return Math.max(limit * VECTOR_CANDIDATE_POOL_MULTIPLIER, VECTOR_CANDIDATE_POOL_MIN);
+  }
+
   async function searchStructured(
     conditions: SQL[],
     limit: number
-  ) {
-    return db
+  ): Promise<ListingSearchCandidate[]> {
+    const rows = await db
       .select(listingSearchSelection)
       .from(listings)
       .where(and(...conditions))
       .orderBy(desc(listings.createdAt))
       .limit(limit);
+
+    return rows.map((row) => toStructuredCandidate(row as ListingSearchSelectionRow));
   }
 
   async function searchLexical(
     conditions: SQL[],
+    documentConditions: SQL[],
     filters: SearchListingsFilters
-  ) {
+  ): Promise<ListingSearchSelectionRow[]> {
     const tsQuery = sql`websearch_to_tsquery(${LISTING_SEARCH_TSVECTOR_CONFIG}, ${filters.queryText ?? ""})`;
     const lexicalRank = sql<number>`ts_rank_cd(${listingSearchDocuments.contentTsv}, ${tsQuery})`;
 
-    return db
+    const rows = await db
       .select(listingSearchSelection)
       .from(listingSearchDocuments)
       .innerJoin(listings, eq(listingSearchDocuments.listingId, listings.id))
       .where(
         and(
           ...conditions,
-          eq(listingSearchDocuments.officeId, filters.officeId),
-          eq(
-            listingSearchDocuments.documentType,
-            MAIN_LISTING_SEARCH_DOCUMENT_TYPE
-          ),
+          ...documentConditions,
           sql`${listingSearchDocuments.contentTsv} @@ ${tsQuery}`
         )
       )
       .orderBy(desc(lexicalRank), desc(listings.createdAt))
       .limit(filters.limit);
+
+    return rows.map((row) => toLexicalCandidate(row as ListingSearchSelectionRow));
   }
 
   async function searchVector(
     conditions: SQL[],
+    documentConditions: SQL[],
     filters: SearchListingsFilters,
     queryEmbedding: number[]
-  ) {
+  ): Promise<HybridVectorCandidate[]> {
     const queryEmbeddingVector = sql`${JSON.stringify(queryEmbedding)}::vector(${sql.raw(
       String(LISTING_SEARCH_EMBEDDING_DIMENSION)
     )})`;
     const cosineDistance = sql<number>`${listingSearchDocuments.embedding} <=> ${queryEmbeddingVector}`;
+    const vectorCandidateLimit = buildVectorCandidateLimit(filters.limit);
 
-    return db
-      .select(listingSearchSelection)
+    const rows = await db
+      .select({
+        ...listingSearchSelection,
+        cosineDistance
+      })
       .from(listingSearchDocuments)
       .innerJoin(listings, eq(listingSearchDocuments.listingId, listings.id))
       .where(
         and(
           ...conditions,
-          eq(listingSearchDocuments.officeId, filters.officeId),
-          eq(
-            listingSearchDocuments.documentType,
-            MAIN_LISTING_SEARCH_DOCUMENT_TYPE
-          ),
-          sql`${listingSearchDocuments.embedding} is not null`,
-          sql`${cosineDistance} <= ${MAX_VECTOR_COSINE_DISTANCE}`
+          ...documentConditions,
+          sql`${listingSearchDocuments.embedding} is not null`
         )
       )
       .orderBy(cosineDistance, desc(listings.createdAt))
-      .limit(filters.limit);
+      .limit(vectorCandidateLimit);
+
+    return rows.map((row) => ({
+      ...(row as ListingSearchSelectionRow),
+      cosineDistance: Number(row.cosineDistance)
+    }));
   }
 
   function mergeHybridCandidates<
-    TResult extends {
-      id: string;
-      createdAt: Date;
-    }
+    TResult extends ListingSearchSelectionRow
   >(
     lexicalResults: TResult[],
-    vectorResults: TResult[],
+    vectorResults: Array<TResult & { cosineDistance: number }>,
+    queryText: string,
     limit: number
-  ) {
+  ): ListingSearchCandidate[] {
+    const intentHints = analyzeSearchIntent(queryText);
     const merged = new Map<
       string,
       {
         candidate: TResult;
         lexicalRank: number | null;
         vectorRank: number | null;
+        bestCosineDistance: number | null;
         rrfScore: number;
       }
     >();
@@ -477,6 +795,7 @@ export function createListingsRepository(db: Database) {
         candidate: existing?.candidate ?? candidate,
         lexicalRank: rank,
         vectorRank: existing?.vectorRank ?? null,
+        bestCosineDistance: existing?.bestCosineDistance ?? null,
         rrfScore: (existing?.rrfScore ?? 0) + 1 / (HYBRID_RRF_K + rank)
       });
     }
@@ -489,9 +808,29 @@ export function createListingsRepository(db: Database) {
         candidate: existing?.candidate ?? candidate,
         lexicalRank: existing?.lexicalRank ?? null,
         vectorRank: rank,
+        bestCosineDistance:
+          existing?.bestCosineDistance === null ||
+          existing?.bestCosineDistance === undefined
+            ? candidate.cosineDistance
+            : Math.min(existing.bestCosineDistance, candidate.cosineDistance),
         rrfScore: (existing?.rrfScore ?? 0) + 1 / (HYBRID_RRF_K + rank)
       });
     }
+
+    const toMatchSource = (
+      lexicalRank: number | null,
+      vectorRank: number | null
+    ): ListingSearchMatchSource => {
+      if (lexicalRank !== null && vectorRank !== null) {
+        return "hybrid";
+      }
+
+      if (lexicalRank !== null) {
+        return "lexical";
+      }
+
+      return "vector";
+    };
 
     return [...merged.values()]
       .sort((left, right) => {
@@ -516,12 +855,32 @@ export function createListingsRepository(db: Database) {
           right.candidate.createdAt.getTime() - left.candidate.createdAt.getTime()
         );
       })
-      .map((entry) => entry.candidate)
+      .filter((entry) => {
+        if (entry.lexicalRank !== null) {
+          return candidateSupportsIntent(
+            entry.candidate,
+            entry.lexicalRank,
+            intentHints
+          );
+        }
+
+        return (
+          candidateSupportsIntent(entry.candidate, entry.lexicalRank, intentHints) &&
+          entry.bestCosineDistance !== null &&
+          entry.bestCosineDistance <= MAX_VECTOR_ACCEPTANCE_COSINE_DISTANCE
+        );
+      })
+      .map((entry) => ({
+        ...entry.candidate,
+        matchSource: toMatchSource(entry.lexicalRank, entry.vectorRank),
+        approximate: true,
+        cosineDistance: entry.bestCosineDistance
+      }))
       .slice(0, limit);
   }
 
-  function buildSearchResult<TResult>(input: {
-    listings: TResult[];
+  function buildSearchResult(input: {
+    listings: ListingSearchCandidate[];
     matchInterpretation: ListingSearchMatchInterpretation;
   }) {
     return input;
@@ -532,19 +891,38 @@ export function createListingsRepository(db: Database) {
       filters: SearchListingsFilters,
       options?: {
         queryEmbedding?: number[];
+        retrievalControls?: ListingSearchRetrievalControls;
       }
     ) {
-      const conditions = buildStructuredConditions(filters);
+      const retrievalControls = buildRetrievalControls(options?.retrievalControls);
+      const conditions = buildStructuredConditions(
+        filters,
+        retrievalControls.viewedListingIds
+      );
 
       if (filters.searchMode === "hybrid" && filters.queryText) {
-        const lexicalResults = await searchLexical(conditions, filters);
+        const documentConditions = buildDocumentRetrievalConditions({
+          officeId: filters.officeId,
+          retrievalControls
+        });
+        const lexicalResults = await searchLexical(
+          conditions,
+          documentConditions,
+          filters
+        );
         const vectorResults =
           options?.queryEmbedding && options.queryEmbedding.length > 0
-            ? await searchVector(conditions, filters, options.queryEmbedding)
+            ? await searchVector(
+                conditions,
+                documentConditions,
+                filters,
+                options.queryEmbedding
+              )
             : [];
         const hybridResults = mergeHybridCandidates(
           lexicalResults,
           vectorResults,
+          filters.queryText,
           filters.limit
         );
 

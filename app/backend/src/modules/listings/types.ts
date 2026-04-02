@@ -129,13 +129,30 @@ export interface ListingSearchItem {
   status: string;
 }
 
+export interface ListingSearchShortlistItem extends ListingSearchItem {
+  dues: number | null;
+  buildingAge: number | null;
+  hasBalcony: boolean | null;
+  hasParking: boolean | null;
+  hasElevator: boolean | null;
+  matchSource: ListingSearchMatchSource;
+  approximate: boolean;
+  cosineDistance: number | null;
+}
+
+export type ListingSearchMatchSource =
+  | "structured"
+  | "lexical"
+  | "vector"
+  | "hybrid";
+
 export type ListingSearchMatchInterpretation =
   | "verified_structured_match"
   | "hybrid_candidate"
   | "no_match";
 
 export interface ListingSearchResult {
-  listings: ListingSearchItem[];
+  listings: ListingSearchShortlistItem[];
   matchInterpretation: ListingSearchMatchInterpretation;
 }
 
@@ -171,6 +188,110 @@ export type ListingSearchDocumentRefreshParams = z.infer<
 export type SearchListingsQuery = z.output<typeof searchListingsQuerySchema>;
 export type SearchListingsFilters = ListingOfficeParams & SearchListingsQuery;
 export type HybridListingSearchInput = SearchListingsFilters;
+
+export type SearchIntentMode =
+  | "new_search"
+  | "refine_search"
+  | "replace_failed_free_text"
+  | "next_page";
+
+export type FilterMergeAction = "replace" | "append" | "clear";
+
+export interface SearchAnchorTerm {
+  canonical: string;
+  raw: string;
+}
+
+export interface SearchNegatedTerm {
+  canonical: string;
+  raw: string;
+}
+
+export interface StructuredSearchCriteria {
+  district?: string | undefined;
+  neighborhood?: string | undefined;
+  listingType?: string | undefined;
+  propertyType?: string | undefined;
+  minPrice?: number | undefined;
+  maxPrice?: number | undefined;
+  minBedrooms?: number | undefined;
+  minBathrooms?: number | undefined;
+  minNetM2?: number | undefined;
+  maxNetM2?: number | undefined;
+}
+
+export interface StructuredFilterPatch {
+  district?: string | undefined;
+  neighborhood?: string | undefined;
+  listingType?: string | undefined;
+  propertyType?: string | undefined;
+  minPrice?: number | undefined;
+  maxPrice?: number | undefined;
+  minBedrooms?: number | undefined;
+  minBathrooms?: number | undefined;
+  minNetM2?: number | undefined;
+  maxNetM2?: number | undefined;
+}
+
+export interface DecomposedListingSearchPlan {
+  structuredFilters: StructuredSearchCriteria;
+  semanticIntent: string | null;
+  mustAnchorTerms: SearchAnchorTerm[];
+  negatedTerms: SearchNegatedTerm[];
+  intentMode: SearchIntentMode;
+  structuredFiltersPatch: StructuredFilterPatch;
+  structuredFiltersAction: FilterMergeAction;
+  clearSelectedListingContext: boolean;
+  paginationAction: "none" | "next_page";
+  appliedQueryText: string | null;
+}
+
+export interface ListingSearchRouterState {
+  hasActiveSearch: boolean;
+  lastSearchOutcome?: "success" | "no_match" | "exhausted_results" | "none";
+  activeStructuredCriteria?: StructuredSearchCriteria | undefined;
+  activeSemanticIntent?: string | null | undefined;
+  activeMustAnchorTerms?: SearchAnchorTerm[] | undefined;
+  activeNegatedTerms?: SearchNegatedTerm[] | undefined;
+  selectedListingReferenceCode?: string | null | undefined;
+  selectedListingFactsForContext?:
+    | ListingSelectedContextFacts
+    | null
+    | undefined;
+  viewedListingIds?: string[] | undefined;
+  lastUserSearchText?: string | null | undefined;
+}
+
+export interface ListingSelectedContextFacts {
+  listingType?: string | undefined;
+  district?: string | undefined;
+  neighborhood?: string | undefined;
+}
+
+export type ListingSearchOutcome =
+  | "success"
+  | "no_match"
+  | "exhausted_results"
+  | "none";
+
+export interface ListingSearchState {
+  activeStructuredCriteria: StructuredSearchCriteria;
+  activeSemanticIntent: string | null;
+  activeMustAnchorTerms: SearchAnchorTerm[];
+  activeNegatedTerms: SearchNegatedTerm[];
+  lastSearchOutcome: ListingSearchOutcome;
+  lastUserSearchText: string | null;
+  selectedListingReferenceCode: string | null;
+  selectedListingFactsForContext: ListingSelectedContextFacts | null;
+  viewedListingIds: string[];
+  updatedAt: string;
+}
+
+export interface ListingSearchRetrievalControls {
+  mustAnchorTerms?: SearchAnchorTerm[] | undefined;
+  negatedTerms?: SearchNegatedTerm[] | undefined;
+  viewedListingIds?: string[] | undefined;
+}
 
 export type ListingSearchValidationField =
   (typeof listingSearchValidationFields)[number];

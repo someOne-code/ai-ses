@@ -3,7 +3,16 @@ import { verify } from "retell-sdk";
 import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
 import { buildListingSpeechPresentation } from "../listings/speech.js";
-import type { ListingsService } from "../listings/service.js";
+import {
+  createInitialListingSearchState,
+  type ListingsService
+} from "../listings/service.js";
+import type {
+  ListingSearchMatchInterpretation,
+  ListingSearchOutcome,
+  ListingSearchState,
+  ListingSelectedContextFacts
+} from "../listings/types.js";
 import type { ShowingRequestsService } from "../showing-requests/service.js";
 import { normalizeRetellLeadQualification } from "./post-call-analysis.js";
 import { getCanonicalRetellRepair } from "./repair-messages.js";
@@ -151,14 +160,192 @@ function getCallerSafeFailureMessage(
   }
 }
 
+function buildApproximationNotice(
+  matchInterpretation: ListingSearchMatchInterpretation,
+  count: number
+): string | null {
+  if (matchInterpretation !== "hybrid_candidate" || count === 0) {
+    return null;
+  }
+
+  return "Bu sonuclar, anlattiginiz serbest kritere gore yaklasik adaylar.";
+}
+
+function deriveSearchOutcome(input: {
+  persistedSearchState: ListingSearchState | null;
+  matchInterpretation: ListingSearchMatchInterpretation;
+  count: number;
+}): ListingSearchOutcome {
+  if (input.persistedSearchState) {
+    return input.persistedSearchState.lastSearchOutcome;
+  }
+
+  if (input.count > 0) {
+    return "success";
+  }
+
+  if (input.matchInterpretation === "no_match") {
+    return "no_match";
+  }
+
+  return "none";
+}
+
+function buildSearchOutcomeMessage(input: {
+  searchOutcome: ListingSearchOutcome;
+  queryText: string | undefined;
+  count: number;
+}): string | null {
+  const hasFreeText = normalizeQueryText(input.queryText) !== null;
+
+  if (input.searchOutcome === "exhausted_results") {
+    return "Bu arama icin su an baska dogrulanmis aday kalmadi.";
+  }
+
+  if (input.searchOutcome === "no_match") {
+    return hasFreeText
+      ? "Bu tercih icin dogrulanmis uygun ilan bulamadim."
+      : "Bu kriterlerle uygun ilan bulamadim.";
+  }
+
+  if (input.searchOutcome === "success" && input.count === 0) {
+    return "Uygun ilan bulamadim.";
+  }
+
+  return null;
+}
+
+function buildSearchNextSuggestion(input: {
+  searchOutcome: ListingSearchOutcome;
+  queryText: string | undefined;
+  hasActiveStructuredCriteria: boolean;
+}): string | null {
+  if (input.searchOutcome === "exhausted_results") {
+    return "Isterseniz yeni bir ilce, butce veya oda sayisiyla aramayi sifirdan yenileyelim.";
+  }
+
+  if (input.searchOutcome !== "no_match") {
+    return null;
+  }
+
+  if (normalizeQueryText(input.queryText)) {
+    return "Isterseniz ilce, butce veya oda sayisi ekleyip aramayi netlestirelim.";
+  }
+
+  return input.hasActiveStructuredCriteria
+    ? "Isterseniz butceyi veya oda sayisini biraz esnetelim."
+    : "Isterseniz ilce veya butceyle aramayi daraltalim.";
+}
+
+function normalizeQueryText(value: string | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+
+  return normalized === "" ? null : normalized;
+}
+
+function buildPersistedSearchState(input: {
+  previousState: ListingSearchState | null;
+  nextState: ListingSearchState | null;
+  queryText: string | undefined;
+  matchInterpretation: ListingSearchMatchInterpretation;
+}): ListingSearchState | null {
+  if (!input.nextState) {
+    return null;
+  }
+
+  const normalizedQueryText = normalizeQueryText(input.queryText);
+
+  if (
+    input.matchInterpretation !== "no_match" ||
+    normalizedQueryText === null
+  ) {
+    return input.nextState;
+  }
+
+  return {
+    ...input.nextState,
+    // Keep failed free-text attempts from poisoning the active semantic state.
+    activeSemanticIntent: input.previousState?.activeSemanticIntent ?? null,
+    activeMustAnchorTerms: input.previousState?.activeMustAnchorTerms ?? [],
+    activeNegatedTerms: input.previousState?.activeNegatedTerms ?? []
+  };
+}
+
+function toSelectedListingFacts(input: {
+  listingType: string | null;
+  district: string | null;
+  neighborhood: string | null;
+}): ListingSelectedContextFacts | null {
+  const facts: ListingSelectedContextFacts = {};
+
+  if (input.listingType !== null) {
+    facts.listingType = input.listingType;
+  }
+
+  if (input.district !== null) {
+    facts.district = input.district;
+  }
+
+  if (input.neighborhood !== null) {
+    facts.neighborhood = input.neighborhood;
+  }
+
+  return Object.keys(facts).length > 0 ? facts : null;
+}
+
+function buildSelectedListingState(input: {
+  previousState: ListingSearchState | null;
+  listing: {
+    referenceCode: string;
+    listingType: string | null;
+    district: string | null;
+    neighborhood: string | null;
+  };
+}): ListingSearchState {
+  const baseState =
+    input.previousState ?? createInitialListingSearchState();
+
+  return {
+    ...baseState,
+    selectedListingReferenceCode: input.listing.referenceCode,
+    selectedListingFactsForContext: toSelectedListingFacts({
+      listingType: input.listing.listingType,
+      district: input.listing.district,
+      neighborhood: input.listing.neighborhood
+    }),
+    updatedAt: new Date().toISOString()
+  };
+}
+
 export function createRetellService(options: RetellServiceOptions) {
+  function shouldBypassSignatureVerification(): boolean {
+    const rawFlag = process.env.RETELL_SKIP_SIGNATURE_VERIFICATION;
+    const isNodeTestRun =
+      process.argv.some((value) => value === "--test") ||
+      process.execArgv.some((value) => value === "--test");
+
+    if (!rawFlag || isNodeTestRun) {
+      return false;
+    }
+
+    return (
+      process.env.NODE_ENV === "development" &&
+      rawFlag !== "0" &&
+      rawFlag.toLowerCase() !== "false"
+    );
+  }
+
   async function ensureVerificationKey(): Promise<string> {
     const verificationKey =
       options.webhookSecret ??
-      process.env.RETELL_API_KEY ??
-      env.RETELL_API_KEY ??
       process.env.RETELL_WEBHOOK_SECRET ??
-      env.RETELL_WEBHOOK_SECRET;
+      env.RETELL_WEBHOOK_SECRET ??
+      process.env.RETELL_API_KEY ??
+      env.RETELL_API_KEY;
 
     if (!verificationKey) {
       throw new AppError(
@@ -172,6 +359,10 @@ export function createRetellService(options: RetellServiceOptions) {
   }
 
   async function verifySignature(input: RetellSignedRequestInput) {
+    if (shouldBypassSignatureVerification()) {
+      return;
+    }
+
     const verificationKey = await ensureVerificationKey();
 
     if (!input.signature) {
@@ -356,18 +547,72 @@ export function createRetellService(options: RetellServiceOptions) {
         switch (request.name) {
           case "search_listings": {
             const args = parseSearchListingsToolArgs(request.args);
+            const previousSearchState =
+              (await options.repository.findCallSearchState?.(
+                request.call.call_id
+              )) ?? null;
+            let resolvedSearchState: ListingSearchState | null = null;
+            const searchExecutionContext = {
+              ...(previousSearchState
+                ? { searchState: previousSearchState }
+                : {}),
+              onSearchStateResolved(nextState: ListingSearchState) {
+                resolvedSearchState = nextState;
+              }
+            };
             const searchResult =
               await options.listingsService.searchListingsDetailed({
-              officeId: officeContext.officeId,
-              ...args
+                officeId: officeContext.officeId,
+                ...args
+              }, searchExecutionContext);
+            const count = searchResult.listings.length;
+            const persistedSearchState = buildPersistedSearchState({
+              previousState: previousSearchState,
+              nextState: resolvedSearchState,
+              queryText: args.queryText,
+              matchInterpretation: searchResult.matchInterpretation
+            });
+
+            if (persistedSearchState) {
+              await options.repository.updateCallSearchState?.(
+                request.call.call_id,
+                persistedSearchState
+              );
+            }
+            const searchOutcome = deriveSearchOutcome({
+              persistedSearchState,
+              matchInterpretation: searchResult.matchInterpretation,
+              count
+            });
+            const searchOutcomeMessage = buildSearchOutcomeMessage({
+              searchOutcome,
+              queryText: args.queryText,
+              count
+            });
+            const nextSuggestion = buildSearchNextSuggestion({
+              searchOutcome,
+              queryText: args.queryText,
+              hasActiveStructuredCriteria:
+                persistedSearchState
+                  ? Object.keys(
+                      persistedSearchState.activeStructuredCriteria
+                    ).length > 0
+                  : false
             });
 
             result = {
               ok: true,
               tool: request.name,
               data: {
-                count: searchResult.listings.length,
+                count,
                 matchInterpretation: searchResult.matchInterpretation,
+                searchOutcome,
+                searchOutcomeMessage,
+                nextSuggestion,
+                approximationNotice: buildApproximationNotice(
+                  searchResult.matchInterpretation,
+                  count
+                ),
                 listings: searchResult.listings.map((listing) => ({
                   ...listing,
                   ...buildListingSpeechPresentation(listing)
@@ -383,6 +628,24 @@ export function createRetellService(options: RetellServiceOptions) {
               officeId: officeContext.officeId,
               referenceCode: args.referenceCode
             });
+            const previousSearchState =
+              (await options.repository.findCallSearchState?.(
+                request.call.call_id
+              )) ?? null;
+            const selectedListingState = buildSelectedListingState({
+              previousState: previousSearchState,
+              listing: {
+                referenceCode: listing.referenceCode,
+                listingType: listing.listingType,
+                district: listing.district,
+                neighborhood: listing.neighborhood
+              }
+            });
+
+            await options.repository.updateCallSearchState?.(
+              request.call.call_id,
+              selectedListingState
+            );
 
             result = {
               ok: true,

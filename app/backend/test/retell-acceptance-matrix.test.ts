@@ -20,7 +20,7 @@ test("acceptance matrix keeps verified lookup before listing facts across contra
   );
   assert.match(
     listingHelpStatePrompt,
-    /error\.repairStep=referenceCode, repair only the reference code\./
+    /error\.repairStep=referenceCode, stay in referenceCode repair only\./
   );
 });
 

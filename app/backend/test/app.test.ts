@@ -23,7 +23,9 @@ import {
 import type {
   ListingDetail,
   MainListingSearchDocumentRefreshResult,
-  ListingSearchItem
+  ListingSearchItem,
+  ListingSearchMatchInterpretation,
+  ListingSearchShortlistItem
 } from "../src/modules/listings/types.js";
 import {
   parseListingByReferenceParams,
@@ -183,6 +185,27 @@ function toListingSearchItem(
   return searchItem;
 }
 
+function toListingSearchShortlistItem(
+  listing: ListingFixture,
+  options?: {
+    matchSource?: ListingSearchShortlistItem["matchSource"];
+    approximate?: boolean;
+    cosineDistance?: number | null;
+  }
+): ListingSearchShortlistItem {
+  return {
+    ...toListingSearchItem(listing),
+    dues: listing.dues,
+    buildingAge: listing.buildingAge,
+    hasBalcony: listing.hasBalcony,
+    hasParking: listing.hasParking,
+    hasElevator: listing.hasElevator,
+    matchSource: options?.matchSource ?? "structured",
+    approximate: options?.approximate ?? false,
+    cosineDistance: options?.cosineDistance ?? null
+  };
+}
+
 function createFakeListingsService(): ListingsService {
   async function searchListingsDetailed(filters: Parameters<ListingsService["searchListings"]>[0]) {
     const listings = LISTING_FIXTURES
@@ -294,6 +317,40 @@ function createFakeListingsService(): ListingsService {
         embeddingUpdatedAt: "2026-03-24T10:00:00.000Z",
         updatedAt: "2026-03-24T10:00:00.000Z"
       };
+    }
+  };
+}
+
+function createListingsServiceWithDetailedResult(
+  matchInterpretation: ListingSearchMatchInterpretation,
+  fixtureIndexes: number[] = [0]
+): ListingsService {
+  const base = createFakeListingsService();
+  const shortlist = fixtureIndexes.map((fixtureIndex) => {
+    const listing = LISTING_FIXTURES[fixtureIndex];
+
+    assert.ok(listing);
+
+    return toListingSearchShortlistItem(listing, {
+      matchSource:
+        matchInterpretation === "hybrid_candidate" ? "hybrid" : "structured",
+      approximate: matchInterpretation === "hybrid_candidate",
+      cosineDistance: matchInterpretation === "hybrid_candidate" ? 0.14 : null
+    });
+  });
+
+  return {
+    ...base,
+
+    async searchListingsDetailed() {
+      return {
+        listings: shortlist,
+        matchInterpretation
+      };
+    },
+
+    async searchListings() {
+      return shortlist.map(toListingSearchItem);
     }
   };
 }
@@ -415,14 +472,19 @@ function createFakeRetellRepository() {
   };
 }
 
-function createFakeRetellService() {
+function createFakeRetellService(options?: {
+  listingsService?: ListingsService;
+  showingRequestsService?: ShowingRequestsService;
+}) {
   const retellRepository = createFakeRetellRepository();
 
   return {
     service: createRetellService({
       repository: retellRepository.repository,
-      listingsService: createFakeListingsService(),
-      showingRequestsService: createFakeShowingRequestsService().service,
+      listingsService: options?.listingsService ?? createFakeListingsService(),
+      showingRequestsService:
+        options?.showingRequestsService ??
+        createFakeShowingRequestsService().service,
       webhookSecret: process.env.RETELL_WEBHOOK_SECRET
     }),
     auditEvents: retellRepository.auditEvents,
@@ -1317,6 +1379,33 @@ test("reference-code canonicalizer converts spoken Turkish cardinal groups into 
   );
 });
 
+test("reference-code canonicalizer is not tied to a single numeric suffix", () => {
+  assert.equal(
+    canonicalizeListingReferenceCode(
+      "DEMO IST \u00fc\u00e7 iki d\u00f6rt bir"
+    ),
+    "DEMOIST3241"
+  );
+  assert.equal(
+    canonicalizeListingReferenceCode(
+      "DEMO IST otuz iki k\u0131rk bir"
+    ),
+    "DEMOIST3241"
+  );
+  assert.equal(
+    canonicalizeListingReferenceCode(
+      "DEMO IST \u00fc\u00e7 bin iki y\u00fcz k\u0131rk bir"
+    ),
+    "DEMOIST3241"
+  );
+  assert.equal(
+    canonicalizeListingReferenceCode(
+      "DEMO IST \u00fc\u00e7 bin sekiz y\u00fcz doksan \u00fc\u00e7"
+    ),
+    "DEMOIST3893"
+  );
+});
+
 test("listing reference lookup resolves spoken and segmented variants to the same office-scoped listing", async () => {
   await withSeededReferenceLookupService(
     async ({ service, officeId, otherOfficeId, insertListing }) => {
@@ -1348,6 +1437,41 @@ test("listing reference lookup resolves spoken and segmented variants to the sam
         assert.equal(listing.id, expectedListing.id);
         assert.equal(listing.referenceCode, "DEMO-IST-3401");
         assert.equal(listing.title, "Demo Istanbul Listing");
+      }
+    }
+  );
+});
+
+test("listing reference lookup resolves non-3401 spoken variants when office-unique", async () => {
+  await withSeededReferenceLookupService(
+    async ({ service, officeId, otherOfficeId, insertListing }) => {
+      const expectedListing = await insertListing({
+        referenceCode: "DEMO-IST-3241",
+        title: "Demo Istanbul 3241 Listing"
+      });
+
+      await insertListing({
+        officeId: otherOfficeId,
+        referenceCode: "DEMO-IST-3241",
+        title: "Other Office 3241 Listing"
+      });
+
+      const variants = [
+        "DEMO IST \u00fc\u00e7 iki d\u00f6rt bir",
+        "DEMO IST otuz iki k\u0131rk bir",
+        "DEMO IST \u00fc\u00e7 bin iki y\u00fcz k\u0131rk bir",
+        "DEMO IST 32 41",
+        "32 41"
+      ];
+
+      for (const referenceCode of variants) {
+        const listing = await service.getListingByReference({
+          officeId,
+          referenceCode
+        });
+
+        assert.equal(listing.id, expectedListing.id);
+        assert.equal(listing.referenceCode, "DEMO-IST-3241");
       }
     }
   );
@@ -1585,6 +1709,7 @@ test("POST /v1/retell/tools executes an office-scoped search with a valid signat
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ok, true);
   assert.equal(response.json().tool, "search_listings");
+  assert.equal(response.json().data.approximationNotice, null);
   assert.deepEqual(
     response.json().data.listings.map(
       (listing: ListingSearchItem) => listing.referenceCode
@@ -1596,6 +1721,140 @@ test("POST /v1/retell/tools executes an office-scoped search with a valid signat
   assert.equal("hasBalcony" in response.json().data.listings[0], false);
   assert.equal(response.json().data.listings[0].spokenDues, null);
   assert.equal(retell.auditEvents.length, 1);
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools adds approximationNotice for hybrid candidate search results", async () => {
+  const listingsService = createListingsServiceWithDetailedResult(
+    "hybrid_candidate"
+  );
+  const retell = createFakeRetellService({ listingsService });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    retellService: retell.service,
+    showingRequestsService: createFakeShowingRequestsService().service
+  });
+
+  const payload = {
+    name: "search_listings",
+    args: {
+      queryText: "metroya yakin"
+    },
+    call: {
+      call_id: "retell-call-hybrid-search",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await createRetellSignature(payload)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(response.json().data.count, 1);
+  assert.equal(response.json().data.matchInterpretation, "hybrid_candidate");
+  assert.equal(
+    response.json().data.approximationNotice,
+    "Bu sonuclar, anlattiginiz serbest kritere gore yaklasik adaylar."
+  );
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools leaves approximationNotice null when hybrid search returns no candidates", async () => {
+  const listingsService = createListingsServiceWithDetailedResult(
+    "hybrid_candidate",
+    []
+  );
+  const retell = createFakeRetellService({ listingsService });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    retellService: retell.service,
+    showingRequestsService: createFakeShowingRequestsService().service
+  });
+
+  const payload = {
+    name: "search_listings",
+    args: {
+      queryText: "metroya yakin"
+    },
+    call: {
+      call_id: "retell-call-hybrid-empty-search",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await createRetellSignature(payload)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(response.json().data.count, 0);
+  assert.equal(response.json().data.matchInterpretation, "hybrid_candidate");
+  assert.equal(response.json().data.approximationNotice, null);
+
+  await app.close();
+});
+
+test("POST /v1/retell/tools leaves approximationNotice null for no_match results", async () => {
+  const listingsService = createListingsServiceWithDetailedResult("no_match");
+  const retell = createFakeRetellService({ listingsService });
+  const app = await createApp({
+    registerDatabasePlugin: false,
+    readyCheck: async () => undefined,
+    listingsService,
+    retellService: retell.service,
+    showingRequestsService: createFakeShowingRequestsService().service
+  });
+
+  const payload = {
+    name: "search_listings",
+    args: {
+      queryText: "metroya yakin"
+    },
+    call: {
+      call_id: "retell-call-no-match-search",
+      metadata: {
+        office_id: OFFICE_1_ID
+      }
+    }
+  };
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/v1/retell/tools",
+    headers: {
+      "x-retell-signature": await createRetellSignature(payload)
+    },
+    payload
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().ok, true);
+  assert.equal(response.json().data.count, 1);
+  assert.equal(response.json().data.matchInterpretation, "no_match");
+  assert.equal(response.json().data.approximationNotice, null);
 
   await app.close();
 });

@@ -12,6 +12,10 @@ import {
 } from "./embeddings.js";
 import { createListingsRepository } from "./repository.js";
 import {
+  createGeminiListingSearchRouterFromEnv,
+  type ListingSearchRouter
+} from "./router.js";
+import {
   createListingSearchDocumentsRepository,
   createListingSearchDocumentsService
 } from "./search-documents.js";
@@ -30,6 +34,7 @@ interface ListingsRouteOptions {
   service?: ListingsService;
   embeddingGenerator?: ListingEmbeddingGenerator;
   queryEmbeddingGenerator?: ListingQueryEmbeddingGenerator;
+  searchRouter?: ListingSearchRouter;
   searchDocumentRefreshSecret?: string;
 }
 
@@ -54,6 +59,11 @@ export const registerListingsRoutes: FastifyPluginAsync<ListingsRouteOptions> = 
         (env.GEMINI_API_KEY
           ? createGeminiListingQueryEmbeddingGeneratorFromEnv()
           : undefined);
+      const defaultSearchRouter =
+        options.searchRouter ??
+        (env.GEMINI_API_KEY
+          ? createGeminiListingSearchRouterFromEnv()
+          : undefined);
       const searchDocumentsService =
         defaultEmbeddingGenerator === undefined
           ? undefined
@@ -73,6 +83,11 @@ export const registerListingsRoutes: FastifyPluginAsync<ListingsRouteOptions> = 
               ...(defaultQueryEmbeddingGenerator
                 ? {
                     queryEmbeddingGenerator: defaultQueryEmbeddingGenerator
+                  }
+                : {}),
+              ...(defaultSearchRouter
+                ? {
+                    searchRouter: defaultSearchRouter
                   }
                 : {})
             }
