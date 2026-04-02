@@ -236,6 +236,47 @@ function toSelectedListingContext(input: {
   };
 }
 
+function toSelectedListingFacts(
+  listing: Pick<
+    ListingSearchShortlistItem,
+    "listingType" | "district" | "neighborhood"
+  >
+): ListingSelectedContextFacts | null {
+  const facts: ListingSelectedContextFacts = {};
+
+  if (listing.listingType !== null) {
+    facts.listingType = listing.listingType;
+  }
+
+  if (listing.district !== null) {
+    facts.district = listing.district;
+  }
+
+  if (listing.neighborhood !== null) {
+    facts.neighborhood = listing.neighborhood;
+  }
+
+  return Object.keys(facts).length > 0 ? facts : null;
+}
+
+function toAutoFocusedSelectedListingContext(input: {
+  result: ListingSearchResult;
+}): {
+  selectedListingReferenceCode: string | null;
+  selectedListingFactsForContext: ListingSelectedContextFacts | null;
+} | null {
+  if (input.result.listings.length !== 1) {
+    return null;
+  }
+
+  const listing = input.result.listings[0]!;
+
+  return {
+    selectedListingReferenceCode: listing.referenceCode,
+    selectedListingFactsForContext: toSelectedListingFacts(listing)
+  };
+}
+
 export function mergeListingSearchState(input: {
   previousState?: ListingSearchState;
   plan: DecomposedListingSearchPlan;
@@ -319,6 +360,14 @@ export function mergeListingSearchState(input: {
     mustAnchorTerms: activeMustAnchorTerms,
     negatedTerms: activeNegatedTerms
   });
+  const autoFocusedSelectedListingContext =
+    outcome === "success"
+      ? toAutoFocusedSelectedListingContext({
+          result: input.result
+        })
+      : null;
+  const resolvedSelectedListingContext =
+    autoFocusedSelectedListingContext ?? selectedListingContext;
 
   return {
     activeStructuredCriteria,
@@ -327,9 +376,10 @@ export function mergeListingSearchState(input: {
     activeNegatedTerms,
     lastSearchOutcome: outcome,
     lastUserSearchText: input.plan.appliedQueryText ?? previous.lastUserSearchText,
-    selectedListingReferenceCode: selectedListingContext.selectedListingReferenceCode,
+    selectedListingReferenceCode:
+      resolvedSelectedListingContext.selectedListingReferenceCode,
     selectedListingFactsForContext:
-      selectedListingContext.selectedListingFactsForContext,
+      resolvedSelectedListingContext.selectedListingFactsForContext,
     viewedListingIds,
     updatedAt: (input.now ?? new Date()).toISOString()
   };

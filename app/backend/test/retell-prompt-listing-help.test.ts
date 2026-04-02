@@ -66,6 +66,18 @@ test("listing_help prompt keeps selected-listing detail lookup discipline", () =
   );
   assert.match(
     listingHelpStatePrompt,
+    /If the latest verified lookup or latest search_listings result leaves only one concrete listing in play, treat that listing as the active selected listing\./i
+  );
+  assert.match(
+    listingHelpStatePrompt,
+    /If the caller then says "bu ev", "bunu", "onu", "bu ilan", or simply says they want to see it, do not ask for the reference code or listing name again\./i
+  );
+  assert.match(
+    listingHelpStatePrompt,
+    /Only ask the caller to choose between listings when more than one shortlist item is still active\./i
+  );
+  assert.match(
+    listingHelpStatePrompt,
     /If the caller asks about dues, aidat, building age, floor, elevator, balcony, parking, full address, or another selected-listing detail, call get_listing_by_reference first/i
   );
   assert.match(

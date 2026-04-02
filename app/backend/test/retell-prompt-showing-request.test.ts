@@ -33,6 +33,14 @@ test("thin showing_request prompt blocks completion language and close behavior 
 
   assert.match(
     prompt,
+    /From listing_help, keep one already selected listing active\. Do not ask again for its code or title\./
+  );
+  assert.match(
+    prompt,
+    /If the caller says "bu ev", "bunu", "onu", or "bu ilan", keep that listing and continue\./
+  );
+  assert.match(
+    prompt,
     /Never say the request is complete, received, submitted, or being forwarded while any required field is still missing or unclear\./
   );
   assert.match(
@@ -195,7 +203,7 @@ test("thin showing_request prompt removes duplicated workflow narration while ke
 test("thin showing_request prompt stays bounded while keeping the required guards", () => {
   const thinPrompt = showingRequestStatePrompt;
   assert.ok(
-    thinPrompt.length < 5700,
+    thinPrompt.length < 5750,
     `Expected showing_request prompt to stay below the thin-state budget. Length=${thinPrompt.length}.`
   );
   assert.match(

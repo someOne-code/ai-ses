@@ -192,3 +192,141 @@ test("new_search reset language flushes old state and selected listing context",
   assert.deepEqual(nextState.viewedListingIds, []);
   assert.equal(nextState.lastSearchOutcome, "no_match");
 });
+
+test("single-result shortlist auto-focuses selected listing context", () => {
+  const previousState = buildState({
+    activeStructuredCriteria: {
+      district: "Kadikoy",
+      listingType: "sale"
+    },
+    lastSearchOutcome: "success"
+  });
+  const plan = buildPlan({
+    intentMode: "new_search",
+    structuredFilters: {
+      district: "Kadikoy",
+      listingType: "sale"
+    },
+    appliedQueryText: null
+  });
+  const result = buildResult({
+    matchInterpretation: "verified_structured_match",
+    listings: [
+      {
+        id: "listing-1",
+        referenceCode: "DEMO-IST-3403",
+        title: "Single Search Fixture",
+        listingType: "sale",
+        propertyType: "duplex",
+        price: 24500000,
+        currency: "TRY",
+        bedrooms: 4,
+        bathrooms: 3,
+        netM2: 210,
+        district: "Kadikoy",
+        neighborhood: "Fenerbahce",
+        status: "active",
+        dues: 6800,
+        buildingAge: 4,
+        hasBalcony: true,
+        hasParking: true,
+        hasElevator: false,
+        matchSource: "structured",
+        approximate: false,
+        cosineDistance: null
+      }
+    ]
+  });
+
+  const nextState = mergeListingSearchState({
+    previousState,
+    plan,
+    result
+  });
+
+  assert.equal(nextState.selectedListingReferenceCode, "DEMO-IST-3403");
+  assert.deepEqual(nextState.selectedListingFactsForContext, {
+    district: "Kadikoy",
+    neighborhood: "Fenerbahce",
+    listingType: "sale"
+  });
+});
+
+test("multi-result shortlist does not auto-focus a selected listing", () => {
+  const previousState = buildState({
+    selectedListingReferenceCode: "DEMO-IST-3401",
+    selectedListingFactsForContext: {
+      district: "Kadikoy",
+      neighborhood: "Moda",
+      listingType: "rent"
+    },
+    lastSearchOutcome: "success"
+  });
+  const plan = buildPlan({
+    intentMode: "new_search",
+    structuredFilters: {
+      district: "Kadikoy"
+    },
+    clearSelectedListingContext: true
+  });
+  const result = buildResult({
+    matchInterpretation: "verified_structured_match",
+    listings: [
+      {
+        id: "listing-1",
+        referenceCode: "DEMO-IST-3401",
+        title: "First Fixture",
+        listingType: "rent",
+        propertyType: "apartment",
+        price: 65000,
+        currency: "TRY",
+        bedrooms: 2,
+        bathrooms: 1,
+        netM2: 95,
+        district: "Kadikoy",
+        neighborhood: "Moda",
+        status: "active",
+        dues: 1200,
+        buildingAge: 8,
+        hasBalcony: true,
+        hasParking: false,
+        hasElevator: true,
+        matchSource: "structured",
+        approximate: false,
+        cosineDistance: null
+      },
+      {
+        id: "listing-2",
+        referenceCode: "DEMO-IST-3402",
+        title: "Second Fixture",
+        listingType: "rent",
+        propertyType: "apartment",
+        price: 72000,
+        currency: "TRY",
+        bedrooms: 3,
+        bathrooms: 2,
+        netM2: 120,
+        district: "Kadikoy",
+        neighborhood: "Fenerbahce",
+        status: "active",
+        dues: 1800,
+        buildingAge: 5,
+        hasBalcony: true,
+        hasParking: true,
+        hasElevator: true,
+        matchSource: "structured",
+        approximate: false,
+        cosineDistance: null
+      }
+    ]
+  });
+
+  const nextState = mergeListingSearchState({
+    previousState,
+    plan,
+    result
+  });
+
+  assert.equal(nextState.selectedListingReferenceCode, null);
+  assert.equal(nextState.selectedListingFactsForContext, null);
+});

@@ -49,6 +49,9 @@ Reference-code repair:
 
 Selected-listing detail and handoff:
 - search_listings is shortlist output, not proof that every item-level detail is already verified.
+- If the latest verified lookup or latest search_listings result leaves only one concrete listing in play, treat that listing as the active selected listing.
+- If the caller then says "bu ev", "bunu", "onu", "bu ilan", or simply says they want to see it, do not ask for the reference code or listing name again.
+- Only ask the caller to choose between listings when more than one shortlist item is still active.
 - If the caller asks about dues, aidat, building age, floor, elevator, balcony, parking, full address, or another selected-listing detail, call get_listing_by_reference first unless that fact is already present in the current verified result.
 - Transition to showing_request only when one specific listing is already verified and the caller clearly wants to visit it.
 - When that visit intent is clear, transition silently to showing_request. Do not ask any showing-request field in this state.
