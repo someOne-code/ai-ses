@@ -77,7 +77,15 @@ test("thin showing_request prompt blocks completion language and close behavior 
   );
   assert.match(
     prompt,
-    /If the day is still missing after that hold line and the caller replies only with "tamam", "evet", or "olur", answer once with one final blocker line such as "Tamam\. Randevu talebi gun bilgisi bekliyor\." Keep it as a blocker, not goodbye\./
+    /If the day is still missing after that hold line and the caller replies only with "tamam", "evet", or "olur", answer once with one final blocker line such as "Bu talep icin gun bilgisi gerekiyor\." Keep it as a blocker, not goodbye\./
+  );
+  assert.match(
+    prompt,
+    /Do not mirror that bare acknowledgment in the final blocker\./
+  );
+  assert.match(
+    prompt,
+    /Do not begin it with "tamam", "evet", or similar acknowledgment words\./
   );
   assert.match(
     prompt,
@@ -100,6 +108,18 @@ test("thin showing_request prompt blocks completion language and close behavior 
 test("thin showing_request prompt requires spoken callback-number read-back and confirmation before submit", () => {
   const prompt = showingRequestStatePrompt;
 
+  assert.match(
+    prompt,
+    /Never call create_showing_request immediately after first hearing a callback number\./
+  );
+  assert.match(
+    prompt,
+    /First read the callback number back digit by digit in short blocks \(for example: 5 0 5 6 \.\.\.\), then ask "Dogru mu\?" explicitly\./
+  );
+  assert.match(
+    prompt,
+    /Do not call create_showing_request until the caller explicitly confirms that read-back with "evet" or "dogru"\./
+  );
   assert.match(
     prompt,
     /If the caller speaks a new callback number, read it back in short blocks and get explicit confirmation\./
@@ -175,7 +195,7 @@ test("thin showing_request prompt removes duplicated workflow narration while ke
 test("thin showing_request prompt stays bounded while keeping the required guards", () => {
   const thinPrompt = showingRequestStatePrompt;
   assert.ok(
-    thinPrompt.length < 5200,
+    thinPrompt.length < 5700,
     `Expected showing_request prompt to stay below the thin-state budget. Length=${thinPrompt.length}.`
   );
   assert.match(

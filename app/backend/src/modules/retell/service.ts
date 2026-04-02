@@ -2,6 +2,10 @@ import { verify } from "retell-sdk";
 
 import { env } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
+import {
+  parseTurkishMobilePhoneCandidate,
+  type PhoneParseConfidence
+} from "../../lib/phone-parser.js";
 import { buildListingSpeechPresentation } from "../listings/speech.js";
 import {
   createInitialListingSearchState,
@@ -113,12 +117,50 @@ function getCallSummary(call: RetellCall): string | null {
   return getStringProperty(callAnalysis, "call_summary", "summary");
 }
 
+type PhoneConfirmationState = "confirmed" | "unconfirmed" | "not_provided";
+
+interface PhoneParseAuditSummary {
+  digitCount: number;
+  parseConfidence: PhoneParseConfidence;
+  confirmationState: PhoneConfirmationState;
+  normalized: boolean;
+}
+
+function toPhoneConfirmationState(value: unknown): PhoneConfirmationState {
+  if (value === true) {
+    return "confirmed";
+  }
+
+  if (value === false) {
+    return "unconfirmed";
+  }
+
+  return "not_provided";
+}
+
+function buildPhoneParseAuditSummary(
+  args: Record<string, unknown>
+): PhoneParseAuditSummary {
+  const parsedPhone = parseTurkishMobilePhoneCandidate(
+    typeof args.customerPhone === "string" ? args.customerPhone : null
+  );
+
+  return {
+    digitCount: parsedPhone.digitCount,
+    parseConfidence: parsedPhone.parseConfidence,
+    confirmationState: toPhoneConfirmationState(args.customerPhoneConfirmed),
+    normalized: parsedPhone.e164 !== null
+  };
+}
+
 function getWebhookEventName(payload: RetellWebhookPayload): string {
   return payload.event ?? payload.event_type ?? "unknown";
 }
 
 function sanitizeToolArgs(name: string, args: Record<string, unknown>) {
   if (name === "create_showing_request") {
+    const phoneParse = buildPhoneParseAuditSummary(args);
+
     return {
       listingId: typeof args.listingId === "string" ? args.listingId : null,
       preferredTimeWindow:
@@ -129,7 +171,8 @@ function sanitizeToolArgs(name: string, args: Record<string, unknown>) {
         typeof args.preferredDatetime === "string"
           ? args.preferredDatetime
           : null,
-      hasCustomerEmail: typeof args.customerEmail === "string"
+      hasCustomerEmail: typeof args.customerEmail === "string",
+      phoneParse
     };
   }
 

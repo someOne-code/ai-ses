@@ -267,40 +267,97 @@ async function cleanupBookingDispatchFixture(input: {
 }
 
 test("default app wiring registers retell routes with env-backed secret validation", async () => {
+  const previousBypass = process.env.RETELL_SKIP_SIGNATURE_VERIFICATION;
+  delete process.env.RETELL_SKIP_SIGNATURE_VERIFICATION;
   const app = await createApp({
     readyCheck: async () => undefined
   });
 
-  const toolResponse = await app.inject({
-    method: "POST",
-    url: "/v1/retell/tools",
-    payload: {
-      name: "search_listings",
-      args: {},
-      call: {
-        call_id: "default-wiring-retell-tool",
-        metadata: {
-          office_id: randomUUID()
+  try {
+    const toolResponse = await app.inject({
+      method: "POST",
+      url: "/v1/retell/tools",
+      payload: {
+        name: "search_listings",
+        args: {},
+        call: {
+          call_id: "default-wiring-retell-tool",
+          metadata: {
+            office_id: randomUUID()
+          }
         }
       }
-    }
-  });
-  const webhookResponse = await app.inject({
-    method: "POST",
-    url: "/v1/webhooks/retell",
-    payload: {
-      event: "call_ended",
-      call: {
-        call_id: "default-wiring-retell-webhook",
-        call_status: "ended"
+    });
+    const webhookResponse = await app.inject({
+      method: "POST",
+      url: "/v1/webhooks/retell",
+      payload: {
+        event: "call_ended",
+        call: {
+          call_id: "default-wiring-retell-webhook",
+          call_status: "ended"
+        }
       }
+    });
+
+    assert.equal(toolResponse.statusCode, 401);
+    assert.equal(toolResponse.json().error.code, "RETELL_SIGNATURE_INVALID");
+    assert.equal(webhookResponse.statusCode, 401);
+    assert.equal(webhookResponse.json().error.code, "RETELL_SIGNATURE_INVALID");
+  } finally {
+    if (previousBypass === undefined) {
+      delete process.env.RETELL_SKIP_SIGNATURE_VERIFICATION;
+    } else {
+      process.env.RETELL_SKIP_SIGNATURE_VERIFICATION = previousBypass;
     }
+
+    await app.close();
+  }
+});
+
+test("default app wiring can bypass retell signature verification for local development smoke", async () => {
+  const previousBypass = process.env.RETELL_SKIP_SIGNATURE_VERIFICATION;
+  process.env.RETELL_SKIP_SIGNATURE_VERIFICATION = "1";
+  const fixture = await insertShortlistSpeechFixture();
+  const app = await createApp({
+    readyCheck: async () => undefined
   });
 
-  assert.equal(toolResponse.statusCode, 401);
-  assert.equal(toolResponse.json().error.code, "RETELL_SIGNATURE_INVALID");
-  assert.equal(webhookResponse.statusCode, 401);
-  assert.equal(webhookResponse.json().error.code, "RETELL_SIGNATURE_INVALID");
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/retell/tools",
+      payload: {
+        name: "get_listing_by_reference",
+        args: {
+          referenceCode: "DEMO IST 3401"
+        },
+        call: {
+          call_id: "default-wiring-retell-local-bypass",
+          metadata: {
+            office_id: fixture.officeId
+          }
+        }
+      }
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().ok, true);
+    assert.equal(response.json().tool, "get_listing_by_reference");
+    assert.equal(
+      response.json().data.listing.referenceCode,
+      "DEMO-IST-3401"
+    );
+  } finally {
+    if (previousBypass === undefined) {
+      delete process.env.RETELL_SKIP_SIGNATURE_VERIFICATION;
+    } else {
+      process.env.RETELL_SKIP_SIGNATURE_VERIFICATION = previousBypass;
+    }
+
+    await cleanupShowingRequestFixture(fixture);
+    await app.close();
+  }
 });
 
 test("default app wiring uses the showing requests database service", async () => {

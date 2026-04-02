@@ -1408,7 +1408,7 @@ test("POST /v1/retell/tools rejects literal {{user_number}} callback placeholder
   assert.equal(response.json().error.repairStep, "customerPhone");
   assert.match(
     response.json().error.message,
-    /Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor/i
+    /Telefon numaranizi tam anlayamadim, 10 hane olarak tekrar soyler misiniz/i
   );
   assert.deepEqual(response.json().error.fieldErrors, [
     {
@@ -1469,7 +1469,7 @@ test("POST /v1/retell/tools rejects incomplete spoken Turkish mobile numbers", a
   assert.equal(response.json().error.repairStep, "customerPhone");
   assert.match(
     response.json().error.message,
-    /Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor/i
+    /Telefon numaranizi tam anlayamadim, 10 hane olarak tekrar soyler misiniz/i
   );
   assert.deepEqual(response.json().error.fieldErrors, [
     {
@@ -1478,6 +1478,30 @@ test("POST /v1/retell/tools rejects incomplete spoken Turkish mobile numbers", a
         "Customer phone must be a valid Turkish mobile number in spoken, local, or E.164 form."
     }
   ]);
+  const failedAuditEvent = retellRepository.auditEvents.find(
+    (entry) => entry.action === "retell.tool.failed"
+  ) as
+    | {
+        payload?: {
+          args?: {
+            phoneParse?: {
+              digitCount?: number;
+              parseConfidence?: string;
+              confirmationState?: string;
+              normalized?: boolean;
+            };
+          };
+        };
+      }
+    | undefined;
+
+  assert.equal(failedAuditEvent?.payload?.args?.phoneParse?.digitCount, 9);
+  assert.equal(failedAuditEvent?.payload?.args?.phoneParse?.parseConfidence, "low");
+  assert.equal(
+    failedAuditEvent?.payload?.args?.phoneParse?.confirmationState,
+    "not_provided"
+  );
+  assert.equal(failedAuditEvent?.payload?.args?.phoneParse?.normalized, false);
 
   await app.close();
 });
@@ -1584,7 +1608,7 @@ test("Retell service does not choose a repair field from fieldErrors when repair
   );
   assert.doesNotMatch(
     response.json().error.message,
-    /Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor/i
+    /Telefon numaranizi tam anlayamadim, 10 hane olarak tekrar soyler misiniz/i
   );
   assert.deepEqual(response.json().error.fieldErrors, [
     {
@@ -1644,6 +1668,30 @@ test("create_showing_request accepts a single caller name without requiring surn
   assert.equal(response.json().ok, true);
   assert.equal(createdRequests.length, 1);
   assert.equal(createdRequests[0]?.customerName, "Umut");
+  const successAuditEvent = retellRepository.auditEvents.find(
+    (entry) => entry.action === "retell.tool.executed"
+  ) as
+    | {
+        payload?: {
+          args?: {
+            phoneParse?: {
+              digitCount?: number;
+              parseConfidence?: string;
+              confirmationState?: string;
+              normalized?: boolean;
+            };
+          };
+        };
+      }
+    | undefined;
+
+  assert.equal(successAuditEvent?.payload?.args?.phoneParse?.digitCount, 12);
+  assert.equal(successAuditEvent?.payload?.args?.phoneParse?.parseConfidence, "high");
+  assert.equal(
+    successAuditEvent?.payload?.args?.phoneParse?.confirmationState,
+    "not_provided"
+  );
+  assert.equal(successAuditEvent?.payload?.args?.phoneParse?.normalized, true);
 
   await app.close();
 });
@@ -1672,7 +1720,10 @@ test("create_showing_request contract does not imply surname is required", () =>
   assert.match(tool?.description ?? "", /verified backend UUID/i);
   assert.match(tool?.description ?? "", /never a raw spoken reference code/i);
   assert.match(tool?.description ?? "", /never a literal placeholder/i);
-  assert.match(tool?.description ?? "", /confirm it with a short read-back/i);
+  assert.match(
+    tool?.description ?? "",
+    /do not call this tool immediately|explicit confirmation/i
+  );
   assert.match(listingIdProperty.description ?? "", /verified backend listing UUID/i);
   assert.match(listingIdProperty.description ?? "", /never pass a raw reference code/i);
   assert.match(customerNameProperty.description ?? "", /single given name/i);

@@ -47,7 +47,7 @@ test("Retell tool failure parser preserves customerPhone repair metadata and ext
       code: "VALIDATION_ERROR",
       message: "Talebi olusturmak icin bazi bilgileri yeniden teyit etmem gerekiyor.",
       callerMessage:
-        "Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor.",
+        "Telefon numaranizi tam anlayamadim, 10 hane olarak tekrar soyler misiniz?",
       repairStep: "customerPhone",
       fieldErrors: [
         {
@@ -66,7 +66,7 @@ test("Retell tool failure parser preserves customerPhone repair metadata and ext
   assert.equal(result.error.sameCandidate, true);
   assert.equal(
     result.error.callerMessage,
-    "Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor."
+    "Telefon numaranizi tam anlayamadim, 10 hane olarak tekrar soyler misiniz?"
   );
   assert.deepEqual(result.error.fieldErrors, [
     {

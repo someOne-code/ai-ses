@@ -18,6 +18,7 @@ const envSchema = z.object({
   N8N_CRM_CALLBACK_SECRET: z.string().optional(),
   RETELL_API_KEY: z.string().optional(),
   RETELL_WEBHOOK_SECRET: z.string().optional(),
+  RETELL_SKIP_SIGNATURE_VERIFICATION: z.string().optional(),
   SEARCH_DOCUMENT_REFRESH_SECRET: z.string().optional(),
   GEMINI_API_KEY: z.string().optional()
 });

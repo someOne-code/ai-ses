@@ -18,7 +18,7 @@ export interface CanonicalRetellRepair {
 
 export const repairStepCallerMessages: Record<RepairStep, string> = {
   customerPhone:
-    "Telefon numarasini kisa bloklar halinde bastan yeniden almam gerekiyor.",
+    "Telefon numaranizi tam anlayamadim, 10 hane olarak tekrar soyler misiniz?",
   preferredDatetime:
     "Ziyaret gunu ve saat tercihini kisa sekilde yeniden netlestirmem gerekiyor.",
   preferredTimeWindow:

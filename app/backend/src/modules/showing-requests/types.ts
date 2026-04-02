@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { AppError } from "../../lib/errors.js";
+import { parseTurkishMobilePhoneCandidate } from "../../lib/phone-parser.js";
 import type {
   RepairStep,
   VoiceFieldError,
@@ -29,34 +30,6 @@ function normalizeVoiceMissingValue(value: unknown): unknown {
   return value;
 }
 
-function normalizeTurkishMobilePhone(value: string): string | null {
-  const trimmed = value.trim();
-
-  if (trimmed === "" || /[{}]/.test(trimmed)) {
-    return null;
-  }
-
-  const digitsOnly = trimmed.replace(/[^\d]/g, "");
-
-  if (digitsOnly === "") {
-    return null;
-  }
-
-  if (/^5\d{9}$/.test(digitsOnly)) {
-    return `+90${digitsOnly}`;
-  }
-
-  if (/^05\d{9}$/.test(digitsOnly)) {
-    return `+90${digitsOnly.slice(1)}`;
-  }
-
-  if (/^905\d{9}$/.test(digitsOnly)) {
-    return `+${digitsOnly}`;
-  }
-
-  return null;
-}
-
 export const customerPhoneSchema = z
   .string()
   .trim()
@@ -66,7 +39,7 @@ export const customerPhoneSchema = z
     "Customer phone must not contain unresolved template placeholders."
   )
   .transform((value, ctx) => {
-    const normalized = normalizeTurkishMobilePhone(value);
+    const normalized = parseTurkishMobilePhoneCandidate(value).e164;
 
     if (!normalized) {
       ctx.addIssue({

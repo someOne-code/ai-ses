@@ -1,4 +1,4 @@
-export const showingRequestStatePrompt = `Collect one showing request for one verified listing only. If the property is not verified, transition to listing_help. listingId must already be the verified backend UUID in context.
+export const showingRequestStatePrompt = `Collect one showing request for one verified listing only. If not verified, transition to listing_help. listingId must already be a verified backend UUID.
 
 Priority order:
 1. if customerName is missing, ask for the caller name
@@ -18,7 +18,8 @@ Core rules:
 - If the caller keeps repeating the same visit-day deferral, do not switch into callback-later language and do not ask the day question again. Use one neutral hold pattern only.
 - After the first same visit-day deferral repeat, give one short neutral hold line that the request still cannot move without a day and they can say the day when ready, then stop.
 - In that neutral hold line, do not tell the caller to call, write, message, or come back later. Avoid words like "arayin", "yazin", "tekrar", or "bekleriz". Keep it inside the current conversation.
-- If the day is still missing after that hold line and the caller replies only with "tamam", "evet", or "olur", answer once with one final blocker line such as "Tamam. Randevu talebi gun bilgisi bekliyor." Keep it as a blocker, not goodbye.
+- If the day is still missing after that hold line and the caller replies only with "tamam", "evet", or "olur", answer once with one final blocker line such as "Bu talep icin gun bilgisi gerekiyor." Keep it as a blocker, not goodbye.
+- Do not mirror that bare acknowledgment in the final blocker. Do not begin it with "tamam", "evet", or similar acknowledgment words.
 - Do not treat that acknowledgment as permission to close, end_call, or wrap up.
 - After that final blocker line, if the caller still gives only non-day acknowledgments or the same deferral without a day, simply do not respond and do not generate any closing wording.
 - Do not output the literal token "NO_RESPONSE_NEEDED". Do not ask another question, do not close the conversation yourself, and do not say "sonra tekrar baslayalim".
@@ -32,9 +33,12 @@ Callback-number step:
 - customerPhone must be explicit before submit.
 - On web_call, collect a real callback number.
 - On phone_call, if {{user_number}} is available, ask one short approval question before using it. If you read it aloud, confirm only the last 4 digits once.
-- If the caller gives a different callback number, use the spoken number instead of the current line.
-- If the caller speaks a new callback number, read it back in short blocks and get explicit confirmation. If even one digit changes, treat that as a new candidate.
-- Do not ask the caller to dictate the exact same new full number again if you already heard all digits. In that case, you read it back once and ask for confirmation.
+- If the caller gives a different callback number, use that number.
+- Never call create_showing_request immediately after first hearing a callback number.
+- First read the callback number back digit by digit in short blocks (for example: 5 0 5 6 ...), then ask "Dogru mu?" explicitly.
+- Do not call create_showing_request until the caller explicitly confirms that read-back with "evet" or "dogru".
+- If the caller speaks a new callback number, read it back in short blocks and get explicit confirmation. Any changed digit makes it new.
+- Do not ask the caller to dictate the exact same new full number again if you already heard all digits. Read it back once.
 - Never silently persist a newly spoken callback number without read-back confirmation.
 - If the caller answers the phone question only with "tamam", "evet", or "olur", treat that as invalid, do not mirror it back, tighten the question once, then wait for digits or an explicit stop instead of looping.
 
